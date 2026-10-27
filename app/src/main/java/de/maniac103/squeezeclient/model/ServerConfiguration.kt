@@ -35,19 +35,23 @@ data class ServerConfiguration(
     val url: HttpUrl get() {
         // Adapted for SqueezeDrive: accept an explicit scheme (LAN servers are usually plain
         // HTTP, but HTTPS works where the server provides it) instead of always forcing http,
-        // which made a "https://host" entry fail to parse.
+        // which made a "https://host" entry fail to parse. Only the authority is kept: a pasted
+        // path or query is not meaningful for a Lyrion server and would corrupt the cometd and
+        // artwork URLs derived from this base.
         val value = hostnameAndPort.trim()
         val scheme = if (value.startsWith("https://", ignoreCase = true)) "https" else "http"
-        val hostAndPort = value.substringAfter("://", value).substringBefore("/")
-        val url = "$scheme://${value.substringAfter("://", value)}".toHttpUrl()
-        val hasExplicitPort = hostAndPort.takeLastWhile { it != ':' }
-            .toIntOrNull() != null && !hostAndPort.endsWith("]")
-        // If no port number was specified, use the Lyrion default web/API port 9000
-        return if (!hasExplicitPort) {
-            url.newBuilder().port(9000).build()
-        } else {
-            url
+        val authority = value.substringAfter("://", value)
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+        val url = "$scheme://$authority".toHttpUrl()
+        // Lyrion's default web/API port applies whenever the address did not name one.
+        val hasExplicitPort = when {
+            authority.startsWith("[") -> authority.substringAfter("]", "").startsWith(":")
+            authority.isEmpty() -> false
+            else -> authority.lastIndexOf(':') > 0
         }
+        return if (hasExplicitPort) url else url.newBuilder().port(9000).build()
     }
 
     @OptIn(ExperimentalEncodingApi::class)

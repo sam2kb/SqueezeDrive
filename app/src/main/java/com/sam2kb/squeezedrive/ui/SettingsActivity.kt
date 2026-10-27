@@ -101,9 +101,16 @@ class SettingsFragment : PreferenceFragmentCompat() {
             isPersistent = false
             text = sharedPrefs.localPlayerName ?: getString(R.string.settings_local_player_name_default)
             setOnPreferenceChangeListener { _, newValue ->
-                val name = (newValue as String).trimEnd('\u0000')
-                sharedPrefs.edit { putLocalPlayerName(name) }
-                this.text = name
+                val name = (newValue as String).trim().trimEnd('\u0000')
+                if (name.isEmpty()) {
+                    // An empty name would register an unnamed Lyrion player; fall back to the
+                    // default instead of storing it.
+                    sharedPrefs.edit { remove(KEY_LOCAL_PLAYER_NAME) }
+                    this.text = getString(R.string.settings_local_player_name_default)
+                } else {
+                    sharedPrefs.edit { putLocalPlayerName(name) }
+                    this.text = name
+                }
                 false
             }
         }
@@ -256,7 +263,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
             input.requestFocus()
             val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE)
                 as InputMethodManager
-            imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            imm.showSoftInput(input, 0) // flags are ignored; SHOW_IMPLICIT is deprecated
         }
         dialog.show()
     }

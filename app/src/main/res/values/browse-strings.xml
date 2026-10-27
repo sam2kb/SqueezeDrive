@@ -63,5 +63,6 @@
     <string name="browse_error_no_tracks">No tracks found for a random selection</string>
     <string name="browse_error_queue">Could not change the queue</string>
     <string name="browse_error_not_playable">This item cannot be played</string>
+    <string name="browse_error_no_add">This item cannot be added to the queue</string>
     <string name="browse_section_unavailable">This section is not exposed by your Lyrion server (the plugin behind it may be disabled or renamed)</string>
 </resources>

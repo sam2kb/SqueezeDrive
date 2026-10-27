@@ -100,6 +100,7 @@ class LocalPlaybackService :
     private val slimprotoStateFlow = MutableStateFlow<SlimprotoState>(SlimprotoState.Disconnected)
 
     private var sentTrackStartStatus = false
+    private var mediaServiceRequested = false
     private var sentBufferReady = false
 
     private var streamGeneration = 0
@@ -159,7 +160,14 @@ class LocalPlaybackService :
                         .collectLatest { state ->
                             updateForegroundNotification(state)
                             if (state is SlimprotoState.PlayingOrPaused && !state.paused) {
-                                PlaybackService.start(this@LocalPlaybackService)
+                                // One start per playback session: this runs on every track
+                                // change otherwise.
+                                if (!mediaServiceRequested) {
+                                    mediaServiceRequested = true
+                                    PlaybackService.start(this@LocalPlaybackService)
+                                }
+                            } else if (state !is SlimprotoState.PlayingOrPaused) {
+                                mediaServiceRequested = false
                             }
                         }
                 }

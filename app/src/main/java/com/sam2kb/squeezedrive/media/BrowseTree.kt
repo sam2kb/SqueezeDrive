@@ -575,7 +575,6 @@ class BrowseTree(
             }
 
         is JsonPrimitive -> element.contentOrNull
-        else -> null
     }
 
     /**

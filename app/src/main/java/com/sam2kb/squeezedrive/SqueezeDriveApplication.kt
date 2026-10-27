@@ -81,7 +81,9 @@ class SqueezeDriveApplication :
         when (key) {
             "local_player_enabled" -> LocalPlaybackService.triggerStartOrStop(this)
 
-            "server_name", "server_url", "user", "password" -> {
+            // The display name alone does not affect the session; reconnecting for it would
+            // needlessly interrupt playback for a rename.
+            "server_url", "user", "password" -> {
                 connectionHelper.disconnect()
                 if (prefs?.serverConfig != null) {
                     connectionHelper.connect()

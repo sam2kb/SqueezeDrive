@@ -14,9 +14,7 @@ Run inside the build container (JDK 21 + Android SDK 36/37) with the checkout mo
 
 Both commands completed successfully in this pass (`BUILD SUCCESSFUL`, incl. R8 minification,
 resource shrinking and `lintVitalRelease`), produced with Gradle 9.6.1 (wrapper), Android Gradle
-Plugin 9.2.1, Kotlin 2.4.20, compileSdk 37, JDK 21. Compiler notes are cosmetic only: one redundant
-`else` in a sealed `when` and one deprecated Java `SHOW_IMPLICIT` constant in the keyboard
-handling of the parked search dialog (left as-is; behaviour is unaffected on API 29+).
+Plugin 9.2.1, Kotlin 2.4.20, compileSdk 37, JDK 21, without compiler warnings.
 Build environment used here: the `lyriq-android-build:local` container (JDK 21 + Android SDK
 36/37) with the checkout mounted — the same commands work on any JDK 17+ / SDK 37 host.
 

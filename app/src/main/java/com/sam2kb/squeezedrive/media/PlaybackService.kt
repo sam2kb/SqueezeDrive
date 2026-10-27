@@ -204,15 +204,21 @@ class PlaybackService :
         startIndex: Int,
         startPositionMs: Long
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = lifecycleScope.future {
+        if (mediaItems.isEmpty()) {
+            return@future MediaSession.MediaItemsWithStartPosition(emptyList(), 0, C.TIME_UNSET)
+        }
+        // The controller may ask to start in the middle of the requested list; that item plays
+        // and every other requested item is appended afterwards.
+        val playIndex = startIndex.coerceIn(mediaItems.indices)
         val resolved = mediaItems.mapIndexed { index, item ->
             when (val node = MediaIds.parse(item.mediaId)) {
                 is MediaIds.Node.QueueRow -> browseTree.advanceToQueueItem(node.index)
                 MediaIds.Node.RandomMix -> browseTree.startRandomMix()
                 MediaIds.Node.RandomFinite -> browseTree.startFiniteRandom()
                 is MediaIds.Node.Browse -> {
-                    // The first requested item plays, the rest are appended. An item without the
-                    // matching action fails loudly instead of silently doing the wrong thing.
-                    val action = if (index == 0) {
+                    // An item without the matching action fails loudly instead of silently
+                    // doing the wrong thing.
+                    val action = if (index == playIndex) {
                         node.play ?: throw IllegalStateException(
                             getString(R.string.browse_error_not_playable)
                         )
@@ -230,7 +236,7 @@ class PlaybackService :
         }
         // Playing rewrites the server queue; tell browsers so positional rows are refetched.
         notifyQueueChanged()
-        MediaSession.MediaItemsWithStartPosition(resolved, 0, C.TIME_UNSET)
+        MediaSession.MediaItemsWithStartPosition(resolved, playIndex, C.TIME_UNSET)
     }
 
     override fun onAddMediaItems(
@@ -246,6 +252,11 @@ class PlaybackService :
                     ),
                     getString(R.string.browse_action_add)
                 )
+
+                // Procedural random entries are started, not queueable; say so instead of
+                // reporting a silent success.
+                MediaIds.Node.RandomMix, MediaIds.Node.RandomFinite ->
+                    throw IllegalStateException(getString(R.string.browse_error_no_add))
 
                 else -> {}
             }
