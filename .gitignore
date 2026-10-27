@@ -1,0 +1,33 @@
+# Local agent continuity and attachments
+.codex/
+.codex-attachments/
+
+# Android / Gradle / IDE
+.gradle/
+.kotlin/
+**/build/
+local.properties
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+
+# Credentials and signing
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+key.properties
+keystore.properties
+signing.properties
+secrets.properties
+
+# Generated distributions and local material
+*.apk
+*.aab
+*.apks
+artifacts/
+local/
+.DS_Store
+Thumbs.db
