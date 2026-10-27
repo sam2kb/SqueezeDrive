@@ -88,5 +88,7 @@ driving interface, per AAOS guidance.
 ## Artwork
 
 Server artwork URLs are resolved against the configured server and loaded by the session's
-`CacheBitmapLoader` (OkHttp with the scoped auth interceptor) with bounded memory/disk caching.
-The URLs exposed in media metadata contain no credentials.
+`CacheBitmapLoader` (OkHttp with the scoped auth interceptor) with a bounded in-memory cache;
+there is no disk cache and no explicit request sizing in this pass. Cached by URL, so progress
+updates do not re-download artwork. The URLs exposed in media metadata contain no credentials;
+missing artwork falls back to the host's default icon.

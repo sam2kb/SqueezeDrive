@@ -44,7 +44,7 @@ class SqueezeDriveApplication :
             val serverConfig = prefs.serverConfig
             val authHeader = serverConfig?.credentialsAsAuthorizationHeader
             val actualRequest = when {
-                request.url.host == serverConfig?.url?.host && authHeader != null ->
+                request.url.host == serverConfig?.urlOrNull?.host && authHeader != null ->
                     request.newBuilder().addHeader("Authorization", authHeader).build()
 
                 else -> request

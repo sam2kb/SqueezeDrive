@@ -64,6 +64,15 @@ Material adaptations to imported files (recorded as required):
   in that file are otherwise unchanged.
 - `PreferenceExtensions.localPlayerEnabled` defaults to `true` (SqueezeDrive is car-only and
   defaults to this car's player).
+- `ServerConfiguration.url` now accepts an explicit `http://`/`https://` scheme (bare addresses
+  keep the donor behaviour: HTTP with the Lyrion default port 9000) and gains a non-throwing
+  `urlOrNull` used by all consumers, so a malformed saved address reports a connection error
+  instead of crashing the process.
+- `SqueezeboxMediaPlayer` gains `handleSetShuffleModeEnabled`/`handleSetRepeatMode` and reports
+  the server's shuffle/repeat modes in its state (mapped to the platform repeat modes), driving
+  Lyrion's `playlist shuffle/repeat` commands. This makes the car host's standard shuffle/repeat
+  controls functional; the donor's state handling, pending-command acknowledgement and playlist
+  reconciliation are otherwise untouched.
 
 No logic changes were made to the cometd protocol layer, the Slimproto socket, or
 `SqueezeboxMediaPlayer`/`PendingPlayerCommands`. Donor dependencies (Kotlin, coroutines,

@@ -52,6 +52,7 @@
     <string name="browse_action_play">play</string>
     <string name="browse_action_add">add</string>
     <string name="browse_action_play_next">play next</string>
+    <string name="browse_action_favorite">favourite</string>
 
     <!-- Error messages surfaced to the host -->
     <string name="browse_error_fav">Could not update the favourite</string>
@@ -61,4 +62,6 @@
     <string name="browse_error_not_connected">Not connected to the Lyrion server</string>
     <string name="browse_error_no_tracks">No tracks found for a random selection</string>
     <string name="browse_error_queue">Could not change the queue</string>
+    <string name="browse_error_not_playable">This item cannot be played</string>
+    <string name="browse_section_unavailable">This section is not exposed by your Lyrion server (the plugin behind it may be disabled or renamed)</string>
 </resources>

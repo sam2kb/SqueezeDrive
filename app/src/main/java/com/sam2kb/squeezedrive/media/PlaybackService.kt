@@ -23,7 +23,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.annotation.OptIn
-import androidx.core.os.bundleOf
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ServiceLifecycleDispatcher
@@ -37,6 +36,7 @@ import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.session.CacheBitmapLoader
+import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -86,6 +86,8 @@ class PlaybackService :
     private lateinit var browseTree: BrowseTree
     private var lastDisconnectionTime = Clock.System.now()
     private var delayedShutdownJob: Job? = null
+    private var reconnectJob: Job? = null
+    private var reconnectAttempts = 0
 
     override fun onCreate() {
         dispatcher.onServicePreSuperOnCreate()
@@ -118,6 +120,11 @@ class PlaybackService :
             }
         }
 
+        val favoriteButton = CommandButton.Builder(CommandButton.ICON_HEART_UNFILLED)
+            .setDisplayName(getString(R.string.browse_action_favorite))
+            .setSessionCommand(SessionCommand(CMD_FAV_TOGGLE, Bundle.EMPTY))
+            .build()
+
         // No session activity intent: this is a car-only app with no launcher activity.
         val dataSourceFactory = DefaultDataSource.Factory(
             this,
@@ -128,6 +135,7 @@ class PlaybackService :
             .build()
         mediaSession = MediaLibraryService.MediaLibrarySession.Builder(this, player, this)
             .setBitmapLoader(CacheBitmapLoader(bitmapLoader))
+            .setCustomLayout(listOf(favoriteButton))
             .build()
         addSession(mediaSession)
     }
@@ -202,15 +210,26 @@ class PlaybackService :
                 MediaIds.Node.RandomMix -> browseTree.startRandomMix()
                 MediaIds.Node.RandomFinite -> browseTree.startFiniteRandom()
                 is MediaIds.Node.Browse -> {
-                    val action = if (index == 0) (node.play ?: node.add) else (node.add ?: node.play)
-                    action?.let {
-                        browseTree.executeActionOrThrow(it, getString(R.string.browse_action_play))
+                    // The first requested item plays, the rest are appended. An item without the
+                    // matching action fails loudly instead of silently doing the wrong thing.
+                    val action = if (index == 0) {
+                        node.play ?: throw IllegalStateException(
+                            getString(R.string.browse_error_not_playable)
+                        )
+                    } else {
+                        node.add ?: throw IllegalStateException(
+                            getString(R.string.browse_error_not_playable)
+                        )
                     }
+                    browseTree.executeActionOrThrow(action, getString(R.string.browse_action_play))
                 }
-                else -> {}
+
+                else -> throw IllegalStateException(getString(R.string.browse_error_not_playable))
             }
             browseTree.synthesizeItem(item.mediaId)
         }
+        // Playing rewrites the server queue; tell browsers so positional rows are refetched.
+        notifyQueueChanged()
         MediaSession.MediaItemsWithStartPosition(resolved, 0, C.TIME_UNSET)
     }
 
@@ -219,15 +238,21 @@ class PlaybackService :
         controller: MediaSession.ControllerInfo,
         mediaItems: List<MediaItem>
     ): ListenableFuture<List<MediaItem>> = lifecycleScope.future {
-        mediaItems.map { item ->
+        val resolved = mediaItems.map { item ->
             when (val node = MediaIds.parse(item.mediaId)) {
-                is MediaIds.Node.Browse -> node.add?.let {
-                    browseTree.executeActionOrThrow(it, getString(R.string.browse_action_add))
-                }
+                is MediaIds.Node.Browse -> browseTree.executeActionOrThrow(
+                    node.add ?: throw IllegalStateException(
+                        getString(R.string.browse_error_not_playable)
+                    ),
+                    getString(R.string.browse_action_add)
+                )
+
                 else -> {}
             }
             browseTree.synthesizeItem(item.mediaId)
         }
+        notifyQueueChanged()
+        resolved
     }
 
     // -------------------------------------------------------------------------------------------
@@ -259,15 +284,16 @@ class PlaybackService :
         try {
             when (customCommand.customAction) {
                 CMD_FAV_TOGGLE -> {
-                    val url = args.getString(ARG_URL)
-                    if (url != null) {
-                        val nowFavorite = browseTree.toggleFavorite(
-                            url,
-                            args.getString(ARG_TITLE).orEmpty()
-                        )
+                    // With no arguments this operates on the current track (the host's favourite
+                    // button); a controller that knows a target can pass ARG_URL/ARG_TITLE.
+                    val target = args.getString(ARG_URL)?.let { url ->
+                        url to args.getString(ARG_TITLE).orEmpty()
+                    } ?: currentFavouriteTarget()
+                    if (target != null) {
+                        val nowFavorite = browseTree.toggleFavorite(target.first, target.second)
                         SessionResult(
                             SessionResult.RESULT_SUCCESS,
-                            bundleOf(ARG_FAV to nowFavorite)
+                            Bundle().apply { putBoolean(ARG_FAV, nowFavorite) }
                         )
                     } else {
                         commandError(SessionError.ERROR_BAD_VALUE, R.string.browse_error_fav)
@@ -276,6 +302,7 @@ class PlaybackService :
 
                 CMD_QUEUE_CLEAR -> {
                     browseTree.clearQueue()
+                    mediaSession.notifyChildrenChanged(MediaIds.QUEUE, 0, null)
                     SessionResult(SessionResult.RESULT_SUCCESS)
                 }
 
@@ -283,6 +310,7 @@ class PlaybackService :
                     val index = args.getInt(ARG_INDEX, -1)
                     if (index >= 0) {
                         browseTree.removeQueueItem(index)
+                        notifyQueueChanged()
                         SessionResult(SessionResult.RESULT_SUCCESS)
                     } else {
                         commandError(SessionError.ERROR_BAD_VALUE, R.string.browse_error_queue)
@@ -327,10 +355,27 @@ class PlaybackService :
         }
     }
 
+    /**
+     * Invalidates the queue browse list. The child count comes from the server so browsers get an
+     * accurate hint; if it cannot be fetched (e.g. mid-disconnect) the notification is skipped.
+     */
+    private suspend fun notifyQueueChanged() {
+        val count = runCatching { browseTree.queueCount() }.getOrNull() ?: return
+        mediaSession.notifyChildrenChanged(MediaIds.QUEUE, count, null)
+    }
+
+    private suspend fun currentFavouriteTarget(): Pair<String, String>? {
+        val playerId = player.currentPlayer ?: return null
+        val info = connectionHelper.getCurrentTrackInfo(playerId) ?: return null
+        val url = info.url ?: return null
+        return url to info.title.orEmpty()
+    }
+
     private fun commandError(code: Int, messageRes: Int): SessionResult =
         SessionResult(SessionError(code, getString(messageRes)))
 
     private fun handleConnection(status: ConnectionState.Connected) {
+        reconnectAttempts = 0
         // Update connection status first, because currentPlayer checked below is updated on
         // status changes.
         player.isConnectedToServer = true
@@ -358,7 +403,15 @@ class PlaybackService :
         // removes the media notification) if we cannot reconnect for a longer amount of time.
         val retryTime = Clock.System.now() - lastDisconnectionTime
         if (retryTime < 15.minutes) {
-            connectionHelper.connect()
+            // Bounded exponential backoff (5s, 10s, 20s, 30s, ...) so a down server is not hammered.
+            val backoff = (RETRY_BASE_SECONDS shl reconnectAttempts.coerceAtMost(3))
+                .coerceAtMost(RETRY_MAX_SECONDS)
+            reconnectAttempts++
+            reconnectJob?.cancel()
+            reconnectJob = lifecycleScope.launch {
+                delay(backoff.seconds)
+                connectionHelper.connect()
+            }
         } else {
             stopSelf()
         }
@@ -366,6 +419,8 @@ class PlaybackService :
 
     companion object {
         private const val TAG = "PlaybackService"
+        private const val RETRY_BASE_SECONDS = 5L
+        private const val RETRY_MAX_SECONDS = 30L
 
         // Custom session commands (advertised in onConnect).
         const val CMD_FAV_TOGGLE = "sd.fav.toggle"

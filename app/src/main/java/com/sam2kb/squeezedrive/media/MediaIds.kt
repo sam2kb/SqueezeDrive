@@ -43,10 +43,11 @@ import kotlinx.serialization.json.put
  *  - queue rows: `sd:q:<serverPlaylistIndex>`
  *  - browse nodes: `sd:j:<base64url>` carrying a small JSON envelope of the item's Jive actions
  *
- * The envelope has at most the keys `go`, `play`, `add`, `ins` (insert / play-next), each an action
- * object `{"cmd":[...],"params":{...}}`. Only non-null actions are stored. Encoding rebuilds
- * `JiveAction(cmd, params, null, null)` on decode: `nextWindow`/context-menu flags are not needed
- * to drive browsing or playback and are intentionally dropped.
+ * The envelope has the optional key `t` (the item title, truncated) plus at most the keys `go`,
+ * `play`, `add`, `ins` (insert / play-next), each an action object `{"cmd":[...],"params":{...}}`.
+ * Only non-null actions are stored. Encoding rebuilds `JiveAction(cmd, params, null, null)` on
+ * decode: `nextWindow`/context-menu flags are not needed to drive browsing or playback and are
+ * intentionally dropped.
  */
 @OptIn(ExperimentalEncodingApi::class)
 object MediaIds {
@@ -64,21 +65,28 @@ object MediaIds {
 
     private const val QUEUE_PREFIX = "sd:q:"
     private const val BROWSE_PREFIX = "sd:j:"
+    private const val INFO_PREFIX = "sd:info:"
+    private const val MAX_TITLE = 100
+
+    /** Stable id for a non-interactive informational item (see BrowseTree). */
+    fun infoId(kind: String): String = INFO_PREFIX + kind
 
     fun queueId(index: Int): String = "$QUEUE_PREFIX$index"
 
-    /** Encodes the four playback-relevant actions of a browse item into a `sd:j:` id. */
-    fun browseId(actions: JiveActions): String =
-        browseId(actions.goAction, actions.playAction, actions.addAction, actions.insertAction)
+    /** Encodes the playback-relevant actions (and title) of a browse item into a `sd:j:` id. */
+    fun browseId(actions: JiveActions, title: String? = null): String =
+        browseId(actions.goAction, actions.playAction, actions.addAction, actions.insertAction, title)
 
-    /** Encodes the four playback-relevant actions of a browse item into a `sd:j:` id. */
+    /** Encodes the playback-relevant actions (and title) of a browse item into a `sd:j:` id. */
     fun browseId(
         go: JiveAction?,
         play: JiveAction?,
         add: JiveAction?,
-        ins: JiveAction?
+        ins: JiveAction?,
+        title: String? = null
     ): String {
         val envelope = buildJsonObject {
+            title?.let { put("t", it.take(MAX_TITLE)) }
             go?.let { put("go", encodeAction(it)) }
             play?.let { put("play", encodeAction(it)) }
             add?.let { put("add", encodeAction(it)) }
@@ -98,7 +106,10 @@ object MediaIds {
         id == RANDOM_FINITE -> Node.RandomFinite
         id == RANDOM_ABOUT -> Node.RandomAbout
         id.startsWith(QUEUE_PREFIX) ->
-            id.removePrefix(QUEUE_PREFIX).toIntOrNull()?.let { Node.QueueRow(it) } ?: Node.Unknown(id)
+            id.removePrefix(QUEUE_PREFIX).toIntOrNull()
+                ?.takeIf { it >= 0 }
+                ?.let { Node.QueueRow(it) }
+                ?: Node.Unknown(id)
 
         id.startsWith(BROWSE_PREFIX) -> decodeBrowse(id) ?: Node.Unknown(id)
         else -> Node.Unknown(id)
@@ -108,6 +119,7 @@ object MediaIds {
         val json = Base64.UrlSafe.decode(id.removePrefix(BROWSE_PREFIX)).decodeToString()
         val obj = Json.parseToJsonElement(json).jsonObject
         Node.Browse(
+            title = obj["t"]?.jsonPrimitive?.content,
             go = obj["go"]?.let { decodeAction(it.jsonObject) },
             play = obj["play"]?.let { decodeAction(it.jsonObject) },
             add = obj["add"]?.let { decodeAction(it.jsonObject) },
@@ -147,6 +159,7 @@ object MediaIds {
         data class QueueRow(val index: Int) : Node
 
         data class Browse(
+            val title: String? = null,
             val go: JiveAction?,
             val play: JiveAction?,
             val add: JiveAction?,

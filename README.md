@@ -59,9 +59,10 @@ SqueezeDrive has no launcher icon by design: the media host is the driving inter
 
 1. Park the car. In the media host's app list, open SqueezeDrive's **settings** (gear icon —
    the standard AAOS settings entry, available while parked).
-2. Under **Lyrion server**, enter a name, the server address (`host` or `host:port`, default web
-   port `9000`; HTTP LAN servers are supported, HTTPS where your server provides it), and optional
-   username/password. Connection status shows live on the same screen, with a Reconnect action.
+2. Under **Lyrion server**, enter a name, the server address (`host` or `host:port`; the scheme is
+   optional — bare addresses mean `http://`, use `https://host[:port]` if your server provides TLS;
+   the default web port is `9000`), and optional username/password. Connection status shows live
+   on the same screen, with a Reconnect action.
 3. Under **This car (local player)**, check the player name (default **This car**). SqueezeDrive
    registers this name with Lyrion as a persistent player when it connects.
 4. Back out to the media host: browse **Favourites**, **Random tracks**, **Library**, and

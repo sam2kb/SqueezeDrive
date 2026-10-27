@@ -28,10 +28,22 @@ data class ServerConfiguration(
     val username: String?,
     val password: String?
 ) {
+    /** Null instead of throwing when the stored address cannot be parsed. */
+    val urlOrNull: HttpUrl?
+        get() = runCatching { url }.getOrNull()
+
     val url: HttpUrl get() {
-        val url = "http://$hostnameAndPort".toHttpUrl()
-        // If no port number was specified, use the default port 9000
-        return if (url.port == 80 && hostnameAndPort.lastOrNull { it == ':' } == null) {
+        // Adapted for SqueezeDrive: accept an explicit scheme (LAN servers are usually plain
+        // HTTP, but HTTPS works where the server provides it) instead of always forcing http,
+        // which made a "https://host" entry fail to parse.
+        val value = hostnameAndPort.trim()
+        val scheme = if (value.startsWith("https://", ignoreCase = true)) "https" else "http"
+        val hostAndPort = value.substringAfter("://", value).substringBefore("/")
+        val url = "$scheme://${value.substringAfter("://", value)}".toHttpUrl()
+        val hasExplicitPort = hostAndPort.takeLastWhile { it != ':' }
+            .toIntOrNull() != null && !hostAndPort.endsWith("]")
+        // If no port number was specified, use the Lyrion default web/API port 9000
+        return if (!hasExplicitPort) {
             url.newBuilder().port(9000).build()
         } else {
             url

@@ -90,7 +90,7 @@ class CometdClient(
         }
         val newClientId = handshake()
         eventFlow = startListening(newClientId, listenTimeout)
-        Log.d(TAG, "Connected to ${serverConfig.url} with client ID $newClientId")
+        Log.d(TAG, "Connected to ${serverConfig.urlOrNull} with client ID $newClientId")
         clientId = newClientId
         return newClientId
     }
@@ -100,7 +100,7 @@ class CometdClient(
         eventFlow = null
         listenScope?.cancel()
         listenScope = null
-        Log.d(TAG, "Disconnected from ${serverConfig.url}")
+        Log.d(TAG, "Disconnected from ${serverConfig.urlOrNull}")
     }
 
     @Throws(CometdException::class)
@@ -279,8 +279,10 @@ class CometdClient(
             messages.forEach { add(it) }
         }
         val mimeType = "application/json".toMediaType()
+        val baseUrl = serverConfig.urlOrNull
+            ?: throw CometdException("Invalid server address")
         return Request.Builder().apply {
-            url("${serverConfig.url}cometd")
+            url("${baseUrl}cometd")
             // FIXME: pretend to be Squeezer as there's UA filtering in some plugins (e.g. Qobuz)
             //        -> at some point we should get added to the UA list instead
             header("User-Agent", "Squeezer-squeezer/1.0")

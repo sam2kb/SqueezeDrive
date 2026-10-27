@@ -32,7 +32,7 @@ interface ArtworkItem {
             iconId != null -> iconId
             else -> icon
         }
-        val baseUrl = context.prefs.serverConfig?.url ?: return maybeRelativeUrl
+        val baseUrl = context.prefs.serverConfig?.urlOrNull ?: return maybeRelativeUrl
         return maybeRelativeUrl?.let { baseUrl.resolve(it).toString() }
     }
 }

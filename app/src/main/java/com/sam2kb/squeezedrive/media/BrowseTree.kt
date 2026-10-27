@@ -47,9 +47,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Maps Lyrion (LMS) browsing onto the Media3 library tree and holds the small amount of state the
@@ -97,10 +99,16 @@ class BrowseTree(
                     MediaIds.Node.Root -> categoryItems()
                     MediaIds.Node.Random -> randomItems()
                     MediaIds.Node.Favourites ->
-                        homeMenuChildren(favouritesFetchAction(), page, pageSize)
+                        homeMenuChildren(
+                            favouritesFetchAction(), page, pageSize,
+                            "favourites", context.getString(R.string.browse_favourites)
+                        )
 
                     MediaIds.Node.Library ->
-                        homeMenuChildren(libraryFetchAction(), page, pageSize)
+                        homeMenuChildren(
+                            libraryFetchAction(), page, pageSize,
+                            "library", context.getString(R.string.browse_library)
+                        )
 
                     MediaIds.Node.Queue -> queueItems(page, pageSize)
                     is MediaIds.Node.Browse ->
@@ -158,11 +166,12 @@ class BrowseTree(
             MediaIds.Node.RandomMix -> context.getString(R.string.browse_random_mix)
             MediaIds.Node.RandomFinite -> context.getString(R.string.browse_random_finite)
             MediaIds.Node.RandomAbout -> context.getString(R.string.browse_random_about)
+            is MediaIds.Node.Browse -> node.title ?: context.getString(R.string.browse_unknown_item)
             else -> context.getString(R.string.browse_unknown_item)
         }
         val browsable = node is MediaIds.Node.Browse && node.go != null
         val playable = when (node) {
-            is MediaIds.Node.Browse -> node.play != null || node.add != null
+            is MediaIds.Node.Browse -> node.play != null
             is MediaIds.Node.QueueRow -> true
             MediaIds.Node.RandomMix, MediaIds.Node.RandomFinite -> true
             else -> false
@@ -208,32 +217,38 @@ class BrowseTree(
             connectionHelper.fetchItemsForAction(playerId, action, PagingParams(0, 1), false)
         }
         val total = probe.totalCount
-        if (total <= 0) {
+        // A missing/zero count with an empty probe is a genuinely empty catalogue; a missing count
+        // while items came back just means the server omitted it - fall back to the first page.
+        if (total <= 0 && probe.items.isEmpty()) {
             throw IllegalStateException(context.getString(R.string.browse_error_no_tracks))
         }
-        val count = FINITE_RANDOM_SIZE.coerceAtMost(total)
+        val count = if (total <= 0) FINITE_RANDOM_SIZE else FINITE_RANDOM_SIZE.coerceAtMost(total)
         val maxStart = (total - count).coerceAtLeast(0)
-        val start = if (maxStart == 0) 0 else Random.nextInt(maxStart + 1)
+        val start = if (total <= 0 || maxStart == 0) 0 else Random.nextInt(maxStart + 1)
         val page = isolated("random-page") {
             connectionHelper.fetchItemsForAction(playerId, action, PagingParams(start, count), false)
         }
-        val items = page.items.filter { it.actions?.playAction != null }.shuffled()
-        if (items.isEmpty()) {
-            throw IllegalStateException(context.getString(R.string.browse_error_no_tracks))
-        }
+        // The first track needs a play action, every appended track an add action. Play-only
+        // entries cannot be appended and are excluded up front instead of being silently dropped.
+        val shuffled = page.items.shuffled()
+        val first = shuffled.firstOrNull { it.actions?.playAction != null }
+            ?: throw IllegalStateException(context.getString(R.string.browse_error_no_tracks))
+        val rest = shuffled.filter { it.actions?.addAction != null && it !== first }
         // Play the first with its play action, append the rest with their add actions. Never invent
         // playlist commands - the server's per-item actions are the source of truth.
-        val first = items.first()
         executeActionOrThrow(
             requireNotNull(first.actions?.playAction),
             context.getString(R.string.browse_random_finite)
         )
-        items.drop(1).forEach { item ->
-            item.actions?.addAction?.let {
-                executeActionOrThrow(it, context.getString(R.string.browse_random_finite))
-            }
-        }
+        // A finite selection is now genuinely running - record it before the appends so the state
+        // stays truthful even if a later append fails (the queue then holds a shorter selection).
         lastRandomMode = RandomMode.FINITE
+        rest.forEach { item ->
+            executeActionOrThrow(
+                requireNotNull(item.actions?.addAction),
+                context.getString(R.string.browse_random_finite)
+            )
+        }
     }
 
     /** Clears the random-selection marker; called when the queue is cleared. */
@@ -274,6 +289,11 @@ class BrowseTree(
         isolated("queue-remove") { connectionHelper.removePlaylistItem(playerId, index) }
     }
 
+    /** Current queue length as the server reports it (one minimal request). */
+    suspend fun queueCount(): Int = isolated("queue-count") {
+        connectionHelper.fetchPlaylist(playerId, PagingParams.CountOnly).totalCount
+    }
+
     suspend fun advanceToQueueItem(index: Int) {
         isolated("queue-advance") { connectionHelper.advanceToPlaylistPosition(playerId, index) }
     }
@@ -292,12 +312,14 @@ class BrowseTree(
         page: Int,
         pageSize: Int
     ): List<MediaItem> {
-        val size = pageSize.coerceAtMost(MAX_BROWSE_PAGE)
+        // Stride follows the host's page size so consecutive host pages never overlap or skip
+        // rows; the per-request count is bounded to keep single fetches sane.
+        val count = pageSize.coerceAtMost(MAX_BROWSE_PAGE)
         val list = isolated("browse") {
             connectionHelper.fetchItemsForAction(
                 playerId,
                 action,
-                PagingParams(page * size, size),
+                PagingParams(page * pageSize, count),
                 true
             )
         }
@@ -306,12 +328,15 @@ class BrowseTree(
 
     /**
      * Resolves a node through the server's home menu. A missing home menu (never loaded) is a
-     * connection-style failure; a menu that loads but yields nothing is genuinely empty content.
+     * connection-style failure; a menu that loads but lacks the section (disabled/renamed plugin)
+     * is explained with a non-interactive item rather than a silently empty folder.
      */
     private suspend fun homeMenuChildren(
         fetchAction: JiveAction?,
         page: Int,
-        pageSize: Int
+        pageSize: Int,
+        missingInfoKind: String,
+        missingInfoTitle: String
     ): List<MediaItem> {
         if (fetchAction == null) {
             // Could not resolve the home-menu entry. If the menu itself never loaded this is a
@@ -319,16 +344,21 @@ class BrowseTree(
             if (homeMenu() == null) {
                 throw IllegalStateException(context.getString(R.string.browse_error_not_connected))
             }
-            return emptyList()
+            return listOf(
+                infoItem(
+                    MediaIds.infoId(missingInfoKind),
+                    missingInfoTitle,
+                    context.getString(R.string.browse_section_unavailable)
+                )
+            )
         }
         return browseChildren(fetchAction, page, pageSize)
     }
 
     private suspend fun queueItems(page: Int, pageSize: Int): List<MediaItem> {
-        val size = pageSize.coerceAtMost(MAX_BROWSE_PAGE)
-        val start = page * size
+        val count = pageSize.coerceAtMost(MAX_BROWSE_PAGE)
         val playlist = isolated("queue") {
-            connectionHelper.fetchPlaylist(playerId, PagingParams(start, size))
+            connectionHelper.fetchPlaylist(playerId, PagingParams(page * pageSize, count))
         }
         return playlist.items.mapIndexed { index, row ->
             val metadata = MediaMetadata.Builder()
@@ -381,7 +411,8 @@ class BrowseTree(
             go = actions?.goAction,
             play = actions?.playAction,
             add = actions?.addAction,
-            ins = actions?.insertAction
+            ins = actions?.insertAction,
+            title = item.title
         )
         val metadata = MediaMetadata.Builder()
             .setTitle(item.title)
@@ -516,11 +547,35 @@ class BrowseTree(
         if (active == null) subtitle else "$subtitle · $active"
 
     private fun throwIfServerError(result: JsonElement, label: String) {
-        val obj = result as? JsonObject ?: return
-        val error = obj["error"] ?: return
-        if (error is JsonNull) return
-        val message = runCatching { error.jsonPrimitive.content }.getOrNull().orEmpty()
+        val message = findErrorMessage(result) ?: return
         throw IllegalStateException("$label: $message".trimEnd(':', ' '))
+    }
+
+    /**
+     * Finds Lyrion's error reporting in a response payload. CLI/Jive errors show up either as an
+     * object with an "error" key (scalar or nested) or as an ["error", ...] array; other payloads
+     * are walked so an error nested one level down is not silently treated as success.
+     */
+    private fun findErrorMessage(element: JsonElement): String? = when (element) {
+        is JsonObject -> {
+            val error = element["error"]
+            when {
+                error == null || error is JsonNull ->
+                    element.values.firstNotNullOfOrNull { findErrorMessage(it) }
+
+                else -> findErrorMessage(error) ?: "error"
+            }
+        }
+
+        is JsonArray ->
+            if ((element.firstOrNull() as? JsonPrimitive)?.contentOrNull == "error") {
+                (element.getOrNull(1) as? JsonPrimitive)?.contentOrNull ?: "error"
+            } else {
+                element.firstNotNullOfOrNull { findErrorMessage(it) }
+            }
+
+        is JsonPrimitive -> element.contentOrNull
+        else -> null
     }
 
     /**
@@ -543,7 +598,7 @@ class BrowseTree(
 
     companion object {
         private const val TAG = "BrowseTree"
-        private const val MAX_BROWSE_PAGE = 200
+        private const val MAX_BROWSE_PAGE = 500
         private const val MAX_SEARCH_PER_CATEGORY = 20
         private const val FINITE_RANDOM_SIZE = 25
         private val HOME_MENU_TIMEOUT = 5.seconds

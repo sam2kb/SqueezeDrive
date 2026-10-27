@@ -97,6 +97,15 @@
 
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="@string/settings_category_search">
+
+        <Preference
+            android:key="search_library"
+            android:title="@string/settings_search_title"
+            android:summary="@string/settings_search_summary" />
+
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/settings_category_about">
 
         <Preference

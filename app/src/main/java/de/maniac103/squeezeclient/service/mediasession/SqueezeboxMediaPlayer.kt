@@ -35,6 +35,7 @@ import de.maniac103.squeezeclient.cometd.ConnectionState
 import de.maniac103.squeezeclient.cometd.request.PlaybackButtonRequest
 import de.maniac103.squeezeclient.extfuncs.prefs
 import de.maniac103.squeezeclient.extfuncs.volumeStepSize
+import de.maniac103.squeezeclient.model.JiveAction
 import de.maniac103.squeezeclient.model.PagingParams
 import de.maniac103.squeezeclient.model.PlayerId
 import de.maniac103.squeezeclient.model.PlayerStatus
@@ -175,6 +176,38 @@ class SqueezeboxMediaPlayer(
         }
     }
 
+    /**
+     * Shuffle and repeat are Lyrion playlist modes ("playlist shuffle/repeat <n>"). Added for
+     * SqueezeDrive so the car host's standard controls have a real effect; the donor had no
+     * equivalent UI. Mode values follow the Lyrion CLI: shuffle 0/1/2 (off/songs/albums),
+     * repeat 0/1/2 (off/title/all).
+     */
+    override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean) = future {
+        val playerId = currentPlayer ?: return@future
+        connectionHelper.executeAction(
+            playerId,
+            JiveAction(
+                listOf("playlist", "shuffle", if (shuffleModeEnabled) "1" else "0"),
+                emptyMap(),
+                null,
+                null
+            )
+        )
+    }
+
+    override fun handleSetRepeatMode(repeatMode: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val mode = when (repeatMode) {
+            Player.REPEAT_MODE_ONE -> "1"
+            Player.REPEAT_MODE_ALL -> "2"
+            else -> "0"
+        }
+        connectionHelper.executeAction(
+            playerId,
+            JiveAction(listOf("playlist", "repeat", mode), emptyMap(), null, null)
+        )
+    }
+
     override fun handleStop() = future {
         val playerId = currentPlayer ?: return@future
         if (connectionHelper.state.value !is ConnectionState.Connected) return@future
@@ -243,6 +276,8 @@ class SqueezeboxMediaPlayer(
             add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
             add(COMMAND_SEEK_TO_PREVIOUS)
             add(COMMAND_STOP)
+            add(COMMAND_SET_SHUFFLE_MODE)
+            add(COMMAND_SET_REPEAT_MODE)
             if (playerState.currentVolume != null) {
                 add(COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS)
                 add(COMMAND_GET_DEVICE_VOLUME)
@@ -277,6 +312,16 @@ class SqueezeboxMediaPlayer(
             .setPlayWhenReady(playWhenReady, PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
             .setPlaylist(playlist)
             .setCurrentMediaItemIndex(currentIndex)
+            .setShuffleModeEnabled(
+                playerState.status.shuffleState != PlayerStatus.ShuffleState.Off
+            )
+            .setRepeatMode(
+                when (playerState.repeatState) {
+                    PlayerStatus.RepeatState.Off -> Player.REPEAT_MODE_OFF
+                    PlayerStatus.RepeatState.RepeatTitle -> Player.REPEAT_MODE_ONE
+                    PlayerStatus.RepeatState.RepeatAll -> Player.REPEAT_MODE_ALL
+                }
+            )
 
         playerState.currentVolume?.let {
             builder.setDeviceVolume(it)

@@ -132,7 +132,7 @@ class LocalPlaybackService :
         )
         startupTimestampNanos = System.nanoTime()
         connectionHelper.positionChangeRequests.playerId = slimproto.playerId
-        connectedServer = prefs.serverConfig?.url?.toString()
+        connectedServer = prefs.serverConfig?.urlOrNull?.toString()
         connectionHelper.localPlayerPosition.server = connectedServer
     }
 
@@ -455,7 +455,7 @@ class LocalPlaybackService :
         null
     }
 
-    private fun isCurrentServer() = connectedServer == prefs.serverConfig?.url?.toString()
+    private fun isCurrentServer() = connectedServer == prefs.serverConfig?.urlOrNull?.toString()
 
     private fun sameTrack(first: PlayerStatus.PlaylistInfo, second: PlayerStatus.PlaylistInfo) =
         first.currentPosition == second.currentPosition && first.nowPlaying == second.nowPlaying

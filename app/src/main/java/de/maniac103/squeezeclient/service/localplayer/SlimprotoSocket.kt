@@ -45,7 +45,7 @@ import okio.sink
 import okio.source
 
 class SlimprotoSocket(prefs: SharedPreferences) {
-    val host: String? = prefs.serverConfig?.url?.host
+    val host: String? = prefs.serverConfig?.urlOrNull?.host
     private val deviceIdentifier: UUID = prefs.getOrCreateDeviceIdentifier()
     private var socket: SocketHolder? = null
 
