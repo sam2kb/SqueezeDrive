@@ -64,5 +64,7 @@
     <string name="browse_error_queue">Could not change the queue</string>
     <string name="browse_error_not_playable">This item cannot be played</string>
     <string name="browse_error_no_add">This item cannot be added to the queue</string>
+    <string name="browse_not_configured">SqueezeDrive is not set up</string>
+    <string name="browse_not_configured_body">Enter your Lyrion server in SqueezeDrive settings. Server setup needs text input, which Android only shows while parked — all music features work while driving.</string>
     <string name="browse_section_unavailable">This section is not exposed by your Lyrion server (the plugin behind it may be disabled or renamed)</string>
 </resources>

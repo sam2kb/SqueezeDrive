@@ -3,6 +3,11 @@
 Scope: [docs/MVP_JOB.md](MVP_JOB.md). Tests were explicitly **not** written or run in this pass
 (owner's instruction); no test dependencies or test CI exist in the project.
 
+**Driving:** every music feature — browse, search, favourites, random, library, queue, transport,
+seek, volume, shuffle/repeat — is delivered through the AAOS media host and works while driving.
+Nothing in the playback path starts an app activity. The only parked-only surface is text input
+for the one-time server setup, which Android Automotive itself restricts to parked.
+
 ## Build commands and results
 
 Run inside the build container (JDK 21 + Android SDK 36/37) with the checkout mounted:
@@ -37,15 +42,16 @@ behaviour. Device validation has not been performed (no device in this environme
 | 5. Library, playlists, search | Implemented | Artists/albums/tracks/genres/playlists browse via the server's own menu (stable IDs, paged fetches capped at 200/list). Album/playlist details show tracks; Play/queue actions per item and per folder via server actions. Search via the media host's search callbacks (library search, server-side). No keyboard workflow while driving (host-owned). Playlist editing/administration deferred (per job). |
 | 6. Now Playing and track info | Partial | Host receives title/artist/album/artwork/state/position/duration; play/pause/prev/next/seek; queue access; favourite action (host button). Shuffle and repeat are exposed as the host's standard controls with truthful mode state (Lyrion `playlist shuffle/repeat`; repeat off/one/all, shuffle off/songs). Parked track-details surface (year/genre/codec/bitrate/sample rate) not implemented in this pass — recorded as a limitation. |
 | 7. Artwork | Implemented (unverified on device) | Server artwork resolved against the configured server, loaded by the session bitmap loader (OkHttp, scoped auth interceptor, caching) with missing-art placeholders at browse level; artwork URLs carry no credentials. Rapid-change correctness follows the donor's revision-checked playlist logic. |
-| 8. Queue | Implemented (reorder deferred) | Queue browse node mirrors the server playlist (IDs/indices consistent with the server); select item, append, play-next, remove, deliberate clear-queue (`sd.queue.clear`). Queue rows are positional snapshots: our own mutations (and plays) invalidate the browse list so hosts refetch; changes made by another Lyrion controller appear on the next refetch and immediately in playback state (which comes from server status subscriptions; no competing local queue). Queue reordering is deferred (job allows parking it); no duplicate commands during reconnects (donor's pending-command acknowledgement). |
-| Parked settings | Implemented | Server setup, live connection status + reconnect, player identity ("This car" name), essential playback preferences. Reached through the AAOS settings entry (`ACTION_APPLICATION_PREFERENCES`), parked-only, not distraction-optimized. |
+| 8. Queue | Implemented (reorder deferred) | Queue browse node mirrors the server playlist (IDs/indices consistent with the server); select item, append, play-next, remove, deliberate clear-queue (`sd.queue.clear`). Queue removal is also wired to Media3's native player command, so the host's own queue controls can remove entries while driving (no custom command needed). Queue rows are positional snapshots: our own mutations (and plays) invalidate the browse list so hosts refetch; changes made by another Lyrion controller appear on the next refetch and immediately in playback state (which comes from server status subscriptions; no competing local queue). Queue reordering is deferred; if a host offers it, the request fails visibly rather than corrupting the queue. No duplicate commands during reconnects (donor's pending-command acknowledgement). |
+| Settings | Implemented | Server setup, live connection status + reconnect, player identity ("This car" name), essential playback preferences, parked library search. Entering text is the one thing Android Automotive restricts to parked; no music feature depends on this screen, and it is not distraction-optimized (correctly, so it cannot be used while driving). |
 | Car interface | Implemented (unverified on device) | Media host owns the driving UI; MediaLibraryService + MediaLibrarySession with legacy `MediaBrowserService` compatibility action; shallow browse tree (Favourites / Random tracks / Library / Queue). No WebView, no custom distraction-optimized activity. |
 
 ## Known limitations (this pass)
 
 - Shuffle and repeat modes are not exposed as distinct session commands.
 - No parked track-details screen (year/genre/codec/bitrate/sample rate/bit depth/channels).
-- Queue reordering deferred (parked-only feature per the job; queue play/remove/clear work).
+- Queue reordering is deferred; a host that offers it gets a visible error rather than a wrong
+  queue. Queue play/remove/clear all work, including through the host's native queue controls.
 - Server discovery not implemented (optional per the job); manual entry only.
 - `sd.item.playNext` is a custom session command because Media3 has no insert callback; hosts
   that do not surface custom commands can still use add-to-queue and the queue view.

@@ -44,6 +44,19 @@ Release builds are minified and resource-shrunk but intentionally **unsigned**. 
 release is wanted later, sign the AAB externally (`jarsigner`/`bundletool` or Play App Signing)
 and keep keystores out of Git.
 
+## While driving
+
+Everything SqueezeDrive does musically is delivered through the vehicle's media host and works
+while driving, with no app screen involved: browsing (Favourites, Random tracks, Library,
+Queue), host search, playback and transport, seek, volume, shuffle/repeat, the favourite action,
+play-next and queue removal. The host owns the driving-optimised layout; SqueezeDrive never
+starts an activity for playback.
+
+The single parked-only surface is the one-time **server setup** screen, because entering a host
+name and credentials requires text input, which Android Automotive only permits while parked.
+That is a platform input rule, not an app feature gate: once the server is entered, nothing needs
+the settings screen again, and the settings entry simply stays hidden while the car is moving.
+
 ## Installing on the car (ADB)
 
 AAOS devices expose ADB over USB or Wi-Fi (head-unit developer mode):
@@ -55,7 +68,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Then open the car's **media source picker** (the vehicle's media host) and choose **SqueezeDrive**.
 SqueezeDrive has no launcher icon by design: the media host is the driving interface.
 
-## First-time setup (parked)
+## First-time setup (one-time, while parked)
 
 1. Park the car. In the media host's app list, open SqueezeDrive's **settings** (gear icon —
    the standard AAOS settings entry, available while parked).

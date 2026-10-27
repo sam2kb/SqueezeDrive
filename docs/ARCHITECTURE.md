@@ -78,7 +78,19 @@ survives the parked settings activity being destroyed.
 All browsing is asynchronous with loading/empty/error states; when disconnected the service asks
 `ConnectionHelper` to connect and reports a browse error the host can retry.
 
-## Parked UI
+## Driving
+
+The whole musical surface is served through the media host: the browse tree, host search
+callbacks, playback/transport/seek/volume, shuffle and repeat, the favourite action, play-next
+and native queue removal all live in `PlaybackService`'s session. No activity is needed — or
+started — for any of it, so everything works while the car is moving. The media host draws the
+driving-optimised layout and enforces the vehicle's distraction rules.
+
+Only text input is parked-restricted by Android Automotive (non-distraction-optimised
+activities cannot be used while driving), which is exactly why the one-time server setup lives in
+an activity that is deliberately *not* distraction-optimised.
+
+## Settings screen
 
 `SettingsActivity` (AppCompat + Preference, `ACTION_APPLICATION_PREFERENCES`) is the only
 activity: server setup, connection status, player identity, and essential preferences. It is

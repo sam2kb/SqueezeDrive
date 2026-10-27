@@ -177,6 +177,20 @@ class SqueezeboxMediaPlayer(
     }
 
     /**
+     * Removes queue entries through the host's own queue controls. Positions map to the server's
+     * playlist positions (the loaded window may start at an offset), and removal runs
+     * back-to-front so earlier indices stay valid.
+     */
+    override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val offset = playerState?.playlist?.offset
+            ?: throw IllegalStateException("The queue is not loaded yet")
+        for (index in (toIndex - 1) downTo fromIndex) {
+            connectionHelper.removePlaylistItem(playerId, offset + index)
+        }
+    }
+
+    /**
      * Shuffle and repeat are Lyrion playlist modes ("playlist shuffle/repeat <n>"). Added for
      * SqueezeDrive so the car host's standard controls have a real effect; the donor had no
      * equivalent UI. Mode values follow the Lyrion CLI: shuffle 0/1/2 (off/songs/albums),
@@ -276,6 +290,7 @@ class SqueezeboxMediaPlayer(
             add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
             add(COMMAND_SEEK_TO_PREVIOUS)
             add(COMMAND_STOP)
+            add(COMMAND_CHANGE_MEDIA_ITEMS)
             add(COMMAND_SET_SHUFFLE_MODE)
             add(COMMAND_SET_REPEAT_MODE)
             if (playerState.currentVolume != null) {

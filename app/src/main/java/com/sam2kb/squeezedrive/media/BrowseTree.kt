@@ -32,6 +32,8 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.sam2kb.squeezedrive.R
 import de.maniac103.squeezeclient.cometd.ConnectionHelper
 import de.maniac103.squeezeclient.cometd.ConnectionState
+import de.maniac103.squeezeclient.extfuncs.prefs
+import de.maniac103.squeezeclient.extfuncs.serverConfig
 import de.maniac103.squeezeclient.cometd.request.LibrarySearchRequest
 import de.maniac103.squeezeclient.model.JiveAction
 import de.maniac103.squeezeclient.model.JiveHomeMenuItem
@@ -89,6 +91,27 @@ class BrowseTree(
         page: Int,
         pageSize: Int
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+        // The root stays browsable even without a usable server: while driving the host must be
+        // able to show the app's destinations instead of a bare error, and each destination
+        // then explains its own state. This is the only node that behaves this way.
+        if (parentId == MediaIds.ROOT) {
+            if (!isConnected()) {
+                connectionHelper.connect()
+            }
+            return scope.future {
+                val categories = categoryItems()
+                val items = if (context.prefs.serverConfig == null) {
+                    categories + infoItem(
+                        MediaIds.infoId("not-configured"),
+                        context.getString(R.string.browse_not_configured),
+                        context.getString(R.string.browse_not_configured_body)
+                    )
+                } else {
+                    categories
+                }
+                LibraryResult.ofItemList(items, null)
+            }
+        }
         if (!isConnected()) {
             connectionHelper.connect()
             return Futures.immediateFuture(disconnectedResult<ImmutableList<MediaItem>>())
