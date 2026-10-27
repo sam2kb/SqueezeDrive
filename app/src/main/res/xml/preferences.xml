@@ -18,7 +18,8 @@
   ~ de.maniac103.squeezeclient.extfuncs.PreferenceExtensions - do not rename them.
   -->
 
-<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <PreferenceCategory android:title="@string/settings_category_server">
 
@@ -70,7 +71,7 @@
             android:title="@string/settings_local_player_name_title"
             android:dialogMessage="@string/settings_local_player_name_dialog_message"
             android:defaultValue="@string/settings_local_player_name_default"
-            android:isPersistent="false" />
+            android:persistent="false" />
 
     </PreferenceCategory>
 

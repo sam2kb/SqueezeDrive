@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SqueezeDrive - Lyrion music for your car
+  Copyright (c) 2026 SqueezeDrive contributors
+
+  Portions adapted from Squeeze Client, Copyright (c) 2024 Danny Baumann.
+
+  This program is free software: you can redistribute it and/or modify it under the terms of the
+  GNU General Public License as published by the Free Software Foundation,
+  either version 3 of the License, or (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  See the GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License along with this program.
+  If not, see <http://www.gnu.org/licenses/>.
+-->
+<resources>
+    <!-- Browse tree root and top-level categories -->
+    <string name="browse_root_title">SqueezeDrive</string>
+    <string name="browse_root_subtitle">Lyrion music for your car</string>
+
+    <string name="browse_favourites">Favourites</string>
+    <string name="browse_favourites_subtitle">Your saved stations and albums</string>
+
+    <string name="browse_random">Random tracks</string>
+    <string name="browse_random_subtitle">Start a mix or pick a one-off selection</string>
+
+    <string name="browse_library">Library</string>
+    <string name="browse_library_subtitle">Artists, albums, tracks and more</string>
+
+    <string name="browse_queue">Queue</string>
+    <string name="browse_queue_subtitle">What is playing next</string>
+
+    <!-- Random tracks node -->
+    <string name="browse_random_mix">Random mix</string>
+    <string name="browse_random_mix_subtitle">An ongoing mix that keeps adding tracks</string>
+    <string name="browse_random_mix_active">Mix is running</string>
+
+    <string name="browse_random_finite">About 25 random tracks</string>
+    <string name="browse_random_finite_subtitle">A one-off selection of about 25 tracks</string>
+    <string name="browse_random_finite_active">Added to the queue</string>
+
+    <string name="browse_random_about">About random playback</string>
+    <string name="browse_random_about_body">Random mix keeps an endless, self-refreshing mix going on the server. About 25 random tracks adds a single batch of tracks once. What is available depends on your Lyrion server and its plugins.</string>
+
+    <!-- Synthesized / fallback items -->
+    <string name="browse_unknown_item">Item</string>
+
+    <!-- Action labels used in error messages -->
+    <string name="browse_action_play">play</string>
+    <string name="browse_action_add">add</string>
+    <string name="browse_action_play_next">play next</string>
+
+    <!-- Error messages surfaced to the host -->
+    <string name="browse_error_fav">Could not update the favourite</string>
+    <string name="browse_error_generic">The server could not complete the request</string>
+    <string name="browse_error_item">That item is not available</string>
+    <string name="browse_error_no_insert">This item cannot be played next</string>
+    <string name="browse_error_not_connected">Not connected to the Lyrion server</string>
+    <string name="browse_error_no_tracks">No tracks found for a random selection</string>
+    <string name="browse_error_queue">Could not change the queue</string>
+</resources>
