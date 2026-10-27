@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ This file is part of SqueezeDrive, an Android Automotive OS client for the Lyrion music server.
+  ~ Copyright (c) 2026 SqueezeDrive contributors
+  ~
+  ~ This program is free software: you can redistribute it and/or modify it under the terms of the
+  ~  GNU General Public License as published by the Free Software Foundation,
+  ~   either version 3 of the License, or (at your option) any later version.
+  ~
+  ~ This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+  ~  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  ~  See the GNU General Public License for more details.
+  ~
+  ~ You should have received a copy of the GNU General Public License along with this program.
+  ~ If not, see <http://www.gnu.org/licenses/>.
+  ~
+  ~ Preference keys are part of the contract with the ported preference helpers in
+  ~ de.maniac103.squeezeclient.extfuncs.PreferenceExtensions - do not rename them.
+  -->
+
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="@string/settings_category_server">
+
+        <EditTextPreference
+            android:key="server_name"
+            android:title="@string/settings_server_name_title"
+            android:dialogMessage="@string/settings_server_name_dialog_message" />
+
+        <EditTextPreference
+            android:key="server_url"
+            android:title="@string/settings_server_url_title"
+            android:summary="@string/settings_server_url_summary"
+            android:dialogMessage="@string/settings_server_url_dialog_message" />
+
+        <EditTextPreference
+            android:key="user"
+            android:title="@string/settings_server_user_title"
+            android:dialogMessage="@string/settings_server_user_dialog_message" />
+
+        <EditTextPreference
+            android:key="password"
+            android:title="@string/settings_server_password_title"
+            android:dialogMessage="@string/settings_server_password_dialog_message"
+            android:inputType="textPassword" />
+
+        <Preference
+            android:key="connection_status"
+            android:title="@string/settings_connection_status_title"
+            android:summary="@string/settings_connection_status_disconnected"
+            android:selectable="false" />
+
+        <Preference
+            android:key="reconnect"
+            android:title="@string/settings_reconnect_title"
+            android:summary="@string/settings_reconnect_summary" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/settings_category_local_player">
+
+        <SwitchPreferenceCompat
+            android:key="local_player_enabled"
+            android:title="@string/settings_local_player_enabled_title"
+            android:summary="@string/settings_local_player_enabled_summary"
+            android:defaultValue="true" />
+
+        <EditTextPreference
+            android:key="local_player_name"
+            android:title="@string/settings_local_player_name_title"
+            android:dialogMessage="@string/settings_local_player_name_dialog_message"
+            android:defaultValue="@string/settings_local_player_name_default"
+            android:persistent="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/settings_category_playback">
+
+        <!-- IntListPreference keeps the selected entry value as an Int in the preference
+             store, because the ported helpers read these keys with SharedPreferences.getInt(). -->
+        <com.wittyfinch.squeezedrive.ui.IntListPreference
+            android:key="fade_in_duration"
+            android:title="@string/settings_fade_in_title"
+            android:entries="@array/settings_fade_in_entries"
+            android:entryValues="@array/settings_fade_in_values"
+            android:defaultValue="0"
+            android:summary="%s" />
+
+        <com.wittyfinch.squeezedrive.ui.IntListPreference
+            android:key="volume_step_size"
+            android:title="@string/settings_volume_step_title"
+            android:entries="@array/settings_volume_step_entries"
+            android:entryValues="@array/settings_volume_step_values"
+            android:defaultValue="5"
+            android:summary="%s" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/settings_category_search">
+
+        <Preference
+            android:key="search_library"
+            android:title="@string/settings_search_title"
+            android:summary="@string/settings_search_summary" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/settings_category_about">
+
+        <Preference
+            android:key="about"
+            android:title="@string/settings_about_title"
+            android:summary="@string/settings_about_summary"
+            android:selectable="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

@@ -1,0 +1,19 @@
+SqueezeDrive
+Lyrion music for your car
+
+Copyright (c) 2026 SqueezeDrive contributors.
+
+SqueezeDrive includes software derived from Squeeze Client.
+Copyright (c) 2024-2026 Danny Baumann and contributors.
+Original source: https://github.com/maniac103/squeezeclient
+Adapted source: https://github.com/sam2kb/squeezeclient
+Source revision: 4bcb826a3d1b3bba8e51a88cd196183e388d8737
+
+The application has been modified for Android Automotive OS.
+Original copyright and license notices are retained in the source files.
+
+SqueezeDrive and the adapted Squeeze Client code are distributed under
+the GNU General Public License, version 3 or (at your option) any later version.
+See LICENSE for the license text.
+
+Third-party dependencies retain their respective licenses and copyright notices.

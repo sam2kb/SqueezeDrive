@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ This file is part of SqueezeDrive, an Android Automotive OS client for the Lyrion music server.
+  ~ Copyright (c) 2026 SqueezeDrive contributors
+  ~
+  ~ This program is free software: you can redistribute it and/or modify it under the terms of the
+  ~  GNU General Public License as published by the Free Software Foundation,
+  ~   either version 3 of the License, or (at your option) any later version.
+  ~
+  ~ This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+  ~  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  ~  See the GNU General Public License for more details.
+  ~
+  ~ You should have received a copy of the GNU General Public License along with this program.
+  ~ If not, see <http://www.gnu.org/licenses/>.
+  -->
+
+<!--
+  A quiet dark theme for the parked settings screen. The driving UI belongs to the
+  AAOS media host; everything app-owned here is meant to be read at a glance in a
+  dark cabin: near-black surfaces, one instrument-amber accent for controls only,
+  and car-sized type (row body 23sp, secondary 18sp, category headers 19sp).
+  Text appearance attributes are overridden at theme level because the androidx
+  preference row layouts resolve their sizes through them.
+-->
+<resources>
+
+    <style name="Theme.SqueezeDrive" parent="Theme.Material3.Dark.NoActionBar">
+
+        <!-- Surfaces: night cabin -->
+        <item name="android:windowBackground">@color/sd_background</item>
+        <item name="android:colorBackground">@color/sd_background</item>
+        <item name="colorSurface">@color/sd_surface</item>
+        <item name="colorSurfaceContainer">@color/sd_surface</item>
+        <item name="colorSurfaceContainerHigh">@color/sd_surface_high</item>
+        <item name="colorOnSurface">@color/sd_text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/sd_text_secondary</item>
+
+        <!-- The single accent, instrument amber. Controls only. -->
+        <item name="colorPrimary">@color/sd_amber</item>
+        <item name="colorOnPrimary">@color/sd_amber_ink</item>
+        <item name="colorSecondary">@color/sd_amber</item>
+        <item name="colorOnSecondary">@color/sd_amber_ink</item>
+        <item name="colorAccent">@color/sd_amber</item>
+        <item name="colorControlActivated">@color/sd_amber</item>
+        <item name="switchStyle">@style/Widget.SqueezeDrive.Switch</item>
+
+        <!-- Text: platform sans, neutral colours -->
+        <item name="android:fontFamily">sans</item>
+        <item name="fontFamily">sans</item>
+        <item name="android:textColorPrimary">@color/sd_text_primary</item>
+        <item name="android:textColorSecondary">@color/sd_text_secondary</item>
+
+        <!-- Car-sized text for the settings rows and their dialogs -->
+        <item name="android:textAppearanceLarge">@style/TextAppearance.SqueezeDrive.RowTitle</item>
+        <item name="android:textAppearanceListItem">@style/TextAppearance.SqueezeDrive.RowTitle</item>
+        <item name="android:textAppearanceMedium">@style/TextAppearance.SqueezeDrive.ChoiceItem</item>
+        <item name="android:textAppearanceSmall">@style/TextAppearance.SqueezeDrive.RowSummary</item>
+        <item name="textAppearanceListItem">@style/TextAppearance.SqueezeDrive.RowTitle</item>
+        <item name="textAppearanceListItemSmall">@style/TextAppearance.SqueezeDrive.RowSummary</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.SqueezeDrive.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.SqueezeDrive.RowSummary</item>
+        <item name="textAppearanceLabelLarge">@style/TextAppearance.SqueezeDrive.LabelLarge</item>
+
+        <item name="preferenceTheme">@style/ThemeOverlay.SqueezeDrive.Preference</item>
+    </style>
+
+    <style name="ThemeOverlay.SqueezeDrive.Preference" parent="PreferenceThemeOverlay">
+        <item name="preferenceCategoryTitleTextAppearance">@style/TextAppearance.SqueezeDrive.Section</item>
+        <item name="preferenceCategoryTitleTextColor">@color/sd_text_section</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.ScreenTitle" parent="TextAppearance.Material3.HeadlineMedium">
+        <item name="android:textSize">26sp</item>
+        <item name="android:textColor">@color/sd_text_primary</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.RowTitle" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">23sp</item>
+        <item name="android:textColor">@color/sd_text_primary</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.RowSummary" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textSize">18sp</item>
+        <item name="android:textColor">@color/sd_text_secondary</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.Section" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textSize">19sp</item>
+        <item name="android:textColor">@color/sd_text_section</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.ChoiceItem" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">22sp</item>
+        <item name="android:textColor">@color/sd_text_primary</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.BodyLarge" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textSize">22sp</item>
+        <item name="android:textColor">@color/sd_text_primary</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="TextAppearance.SqueezeDrive.LabelLarge" parent="TextAppearance.Material3.LabelLarge">
+        <item name="android:textSize">18sp</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+
+    <style name="Widget.SqueezeDrive.Switch" parent="Widget.AppCompat.CompoundButton.Switch">
+        <item name="thumbTint">@color/sd_switch_thumb</item>
+        <item name="trackTint">@color/sd_switch_track</item>
+    </style>
+
+</resources>

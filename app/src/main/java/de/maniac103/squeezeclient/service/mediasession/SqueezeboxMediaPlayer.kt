@@ -1,0 +1,586 @@
+/*
+ * This file is part of Squeeze Client, an Android client for the LMS music server.
+ * Copyright (c) 2026 Danny Baumann
+ *
+ * This program is free software: you can redistribute it and/or modify it under the terms of the
+ * GNU General Public License as published by the Free Software Foundation,
+ * either version 3 of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with this program.
+ * If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+package de.maniac103.squeezeclient.service.mediasession
+
+import com.google.common.util.concurrent.Futures
+import android.content.Context
+import android.os.Looper
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.coroutineScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.common.SimpleBasePlayer
+import androidx.media3.common.util.UnstableApi
+import de.maniac103.squeezeclient.cometd.ConnectionHelper
+import de.maniac103.squeezeclient.cometd.ConnectionState
+import de.maniac103.squeezeclient.cometd.request.PlaybackButtonRequest
+import de.maniac103.squeezeclient.extfuncs.prefs
+import de.maniac103.squeezeclient.extfuncs.volumeStepSize
+import de.maniac103.squeezeclient.model.JiveAction
+import de.maniac103.squeezeclient.model.PagingParams
+import de.maniac103.squeezeclient.model.PlayerId
+import de.maniac103.squeezeclient.model.PlayerStatus
+import de.maniac103.squeezeclient.model.Playlist
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.DurationUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.guava.future
+import kotlinx.coroutines.launch
+
+@UnstableApi
+class SqueezeboxMediaPlayer(
+    private val appContext: Context,
+    private val connectionHelper: ConnectionHelper,
+    private val lifecycle: Lifecycle
+) : SimpleBasePlayer(Looper.getMainLooper()),
+    CoroutineScope by lifecycle.coroutineScope {
+    var currentPlayer: PlayerId? = null
+        set(value) {
+            if (field != value) {
+                field = value
+                clearUnacknowledgedState()
+                playlistFetchJob?.cancel()
+                delayedStateUpdateJob?.cancel()
+                pendingPlayerState = PendingPlayerState()
+                playerState = null
+                updatePlayer(value)
+                invalidateState()
+            }
+        }
+    var isConnectedToServer: Boolean = true
+        set(value) {
+            if (field != value) {
+                field = value
+                if (!value) clearUnacknowledgedState()
+                updatePlayer(currentPlayer)
+                launch {
+                    if (!value) {
+                        // Don't report loss of connection immediately: reconnection may already
+                        // be happening, and we do not want to report intermediate states
+                        delay(2.seconds)
+                    }
+                    invalidateState()
+                }
+            }
+        }
+    private var pendingPlayerState = PendingPlayerState()
+    private var playerState: PlayerState? = null
+    private var unacknowledgedStateChange: PendingPlayerCommands? = null
+    private var statusSubscription: Job? = null
+    private var playlistFetchJob: Job? = null
+    private var delayedStateUpdateJob: Job? = null
+    private var unacknowledgedStateRevertJob: Job? = null
+
+    // PlaybackService resolves host media IDs into Lyrion actions before these callbacks.
+    // Acknowledge the framework handoff without executing the command a second time; the
+    // authoritative timeline arrives through the server status subscription.
+    override fun handleSetMediaItems(
+        mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long
+    ) = Futures.immediateVoidFuture()
+
+    override fun handleAddMediaItems(index: Int, mediaItems: List<MediaItem>) =
+        Futures.immediateVoidFuture()
+
+    override fun handlePrepare() = Futures.immediateVoidFuture()
+
+    override fun handleRelease() = Futures.immediateVoidFuture()
+
+    override fun handleReplaceMediaItems(
+        fromIndex: Int, toIndex: Int, mediaItems: List<MediaItem>
+    ) = Futures.immediateFailedFuture<Void>(
+        UnsupportedOperationException("Replacing queue entries is not supported")
+    )
+
+    override fun handleMoveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val offset = playerState?.playlist?.offset
+            ?: throw IllegalStateException("The queue is not loaded yet")
+        val indices = if (newIndex < fromIndex) {
+            (fromIndex until toIndex).toList()
+        } else {
+            (fromIndex until toIndex).reversed()
+        }
+        for (index in indices) {
+            connectionHelper.movePlaylistItem(playerId, offset + index, offset + newIndex + index - fromIndex)
+        }
+    }
+
+    private fun browseCommands(): Player.Commands = Player.Commands.Builder()
+        .addAll(
+            COMMAND_GET_CURRENT_MEDIA_ITEM, COMMAND_GET_METADATA, COMMAND_GET_TIMELINE,
+            COMMAND_SET_MEDIA_ITEM, COMMAND_CHANGE_MEDIA_ITEMS, COMMAND_PREPARE,
+            COMMAND_PLAY_PAUSE, COMMAND_STOP, COMMAND_RELEASE
+        ).build()
+
+    override fun handleSetDeviceVolume(deviceVolume: Int, flags: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        connectionHelper.setVolume(playerId, deviceVolume)
+    }
+
+    override fun handleIncreaseDeviceVolume(flags: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val currentVolume = playerState?.currentVolume ?: return@future
+        val stepSize = appContext.prefs.volumeStepSize
+        connectionHelper.setVolume(playerId, currentVolume + stepSize)
+    }
+
+    override fun handleDecreaseDeviceVolume(flags: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val currentVolume = playerState?.currentVolume ?: return@future
+        val stepSize = appContext.prefs.volumeStepSize
+        connectionHelper.setVolume(playerId, currentVolume - stepSize)
+    }
+
+    override fun handleSetDeviceMuted(muted: Boolean, flags: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        connectionHelper.setMuteState(playerId, muted)
+    }
+
+    override fun handleSetPlayWhenReady(playWhenReady: Boolean) = future {
+        val playerId = currentPlayer ?: return@future
+        if (connectionHelper.state.value !is ConnectionState.Connected) return@future
+        val newState = when {
+            playWhenReady -> PlayerStatus.PlayState.Playing
+            else -> PlayerStatus.PlayState.Paused
+        }
+        updateUnacknowledgedState(playState = newState)
+        connectionHelper.changePlaybackState(playerId, newState)
+    }
+
+    override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        if (connectionHelper.state.value !is ConnectionState.Connected) return@future
+        when (seekCommand) {
+            COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_NEXT -> {
+                updateUnacknowledgedState(playlistPositionOffset = 1)
+                connectionHelper.sendButtonRequest(PlaybackButtonRequest.NextTrack(playerId))
+            }
+
+            COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS -> {
+                val state = playerState
+                val position = unacknowledgedStateChange?.positionInTrack
+                    ?: state?.currentPlayPosition
+                val playState = unacknowledgedStateChange?.playState ?: state?.playbackState
+                val restart = playState != PlayerStatus.PlayState.Stopped &&
+                    position != null && position >= 5.seconds
+                updateUnacknowledgedState(playlistPositionOffset = if (restart) 0 else -1)
+                connectionHelper.sendButtonRequest(
+                    PlaybackButtonRequest.PreviousTrack(playerId)
+                )
+            }
+
+            COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM -> {
+                val positionSeconds = ((positionMs + 500) / 1000).toInt()
+                updateUnacknowledgedState(positionInTrack = positionMs.milliseconds)
+                connectionHelper.updatePlaybackPosition(playerId, positionSeconds)
+            }
+
+            COMMAND_SEEK_TO_MEDIA_ITEM -> {
+                val positionSeconds = ((positionMs + 500) / 1000).toInt()
+                val playlistPosition = mediaItemIndex + (playerState?.playlist?.offset ?: 0)
+                updateUnacknowledgedState(
+                    absolutePlaylistPosition = playlistPosition,
+                    positionInTrack = positionMs.milliseconds
+                )
+                connectionHelper.advanceToPlaylistPosition(playerId, playlistPosition)
+                if (positionSeconds > 0) {
+                    connectionHelper.updatePlaybackPosition(playerId, positionSeconds)
+                }
+            }
+
+            else -> {}
+        }
+    }
+
+    /**
+     * Removes queue entries through the host's own queue controls. Positions map to the server's
+     * playlist positions (the loaded window may start at an offset), and removal runs
+     * back-to-front so earlier indices stay valid.
+     */
+    override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val offset = playerState?.playlist?.offset
+            ?: throw IllegalStateException("The queue is not loaded yet")
+        for (index in (toIndex - 1) downTo fromIndex) {
+            connectionHelper.removePlaylistItem(playerId, offset + index)
+        }
+    }
+
+    /**
+     * Shuffle and repeat are Lyrion playlist modes ("playlist shuffle/repeat <n>"). Added for
+     * SqueezeDrive so the car host's standard controls have a real effect; the donor had no
+     * equivalent UI. Mode values follow the Lyrion CLI: shuffle 0/1/2 (off/songs/albums),
+     * repeat 0/1/2 (off/title/all).
+     */
+    override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean) = future {
+        val playerId = currentPlayer ?: return@future
+        connectionHelper.executeAction(
+            playerId,
+            JiveAction(
+                listOf("playlist", "shuffle", if (shuffleModeEnabled) "1" else "0"),
+                emptyMap(),
+                null,
+                null
+            )
+        )
+    }
+
+    override fun handleSetRepeatMode(repeatMode: Int) = future {
+        val playerId = currentPlayer ?: return@future
+        val mode = when (repeatMode) {
+            Player.REPEAT_MODE_ONE -> "1"
+            Player.REPEAT_MODE_ALL -> "2"
+            else -> "0"
+        }
+        connectionHelper.executeAction(
+            playerId,
+            JiveAction(listOf("playlist", "repeat", mode), emptyMap(), null, null)
+        )
+    }
+
+    override fun handleStop() = future {
+        val playerId = currentPlayer ?: return@future
+        if (connectionHelper.state.value !is ConnectionState.Connected) return@future
+        updateUnacknowledgedState(playState = PlayerStatus.PlayState.Stopped)
+        connectionHelper.changePlaybackState(playerId, PlayerStatus.PlayState.Stopped)
+    }
+
+    override fun getPlaceholderState(suggestedPlaceholderState: State) =
+        if (unacknowledgedStateChange != null) {
+            getState().buildUpon()
+                .setDeviceVolume(suggestedPlaceholderState.deviceVolume)
+                .setIsDeviceMuted(suggestedPlaceholderState.isDeviceMuted)
+                .build()
+        } else {
+            suggestedPlaceholderState
+        }
+
+    override fun getState(): State {
+        val playerState = playerState
+            ?: return waitingForPlayerState()
+        val currentSong = playerState.currentSong
+            ?: return State.Builder().setAvailableCommands(browseCommands())
+                .setPlaybackState(STATE_IDLE).build()
+        val unacknowledgedChange = unacknowledgedStateChange
+
+        val currentSongDurationUs =
+            playerState.currentSongDuration?.toLong(DurationUnit.MICROSECONDS)
+        val knownPlaylist = playerState.playlist?.takeIf { it.items.isNotEmpty() }
+        val (playlist, currentIndex) = knownPlaylist?.let { list ->
+            val currentPosition = unacknowledgedChange?.playlistPosition
+                ?: playerState.playlistPosition
+            val position = currentPosition.coerceIn(list.offset, list.offset + list.items.lastIndex)
+            val mediaList: List<MediaItemData> = list.items.mapIndexed { index, item ->
+                val builder = if (index + list.offset == playerState.playlistPosition) {
+                    // Prefer current song from status over playlist item, because the former
+                    // may be more up to date (e.g. in case of radio streams)
+                    currentSong.toMediaItemDataBuilder(index).apply {
+                        currentSongDurationUs?.let { setDurationUs(it) }
+                    }
+                } else {
+                    item.toMediaItemDataBuilder(index)
+                }
+                builder.build()
+            }
+            Pair(mediaList, position - list.offset)
+        } ?: currentSong.let { song ->
+            val builder = song.toMediaItemDataBuilder(0)
+            currentSongDurationUs?.let { builder.setDurationUs(it) }
+            Pair(listOf(builder.build()), 0)
+        }
+
+        val commandsBuilder = browseCommands().buildUpon().apply {
+            add(COMMAND_GET_CURRENT_MEDIA_ITEM)
+            add(COMMAND_GET_METADATA)
+            add(COMMAND_GET_TIMELINE)
+            add(COMMAND_PLAY_PAUSE)
+            if (playerState.currentSongDuration != null &&
+                (unacknowledgedChange?.playlistPosition ?: playerState.playlistPosition) ==
+                playerState.playlistPosition &&
+                playerState.playbackState != PlayerStatus.PlayState.Stopped
+            ) {
+                add(COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+            }
+            add(COMMAND_SEEK_TO_MEDIA_ITEM)
+            add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            add(COMMAND_SEEK_TO_NEXT)
+            add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            add(COMMAND_SEEK_TO_PREVIOUS)
+            add(COMMAND_STOP)
+            add(COMMAND_CHANGE_MEDIA_ITEMS)
+            add(COMMAND_SET_SHUFFLE_MODE)
+            add(COMMAND_SET_REPEAT_MODE)
+        }
+
+        val reportedPlayState = unacknowledgedChange?.playState ?: playerState.playbackState
+        val playWhenReady = reportedPlayState == PlayerStatus.PlayState.Playing
+        val playbackState = when {
+            !isConnectedToServer -> STATE_BUFFERING
+
+            !playerState.powered -> STATE_IDLE
+
+            else -> when (reportedPlayState) {
+                PlayerStatus.PlayState.Playing -> STATE_READY
+                PlayerStatus.PlayState.Paused -> STATE_READY
+                PlayerStatus.PlayState.Stopped -> STATE_IDLE
+            }
+        }
+
+        val builder = State.Builder()
+            .setPlaybackState(playbackState)
+            .setAvailableCommands(commandsBuilder.build())
+            .setContentPositionMs(
+                unacknowledgedChange?.positionInTrack?.inWholeMilliseconds
+                    ?: connectionHelper.localPlayPosition(currentPlayer, playerState.status)
+                        ?.inWholeMilliseconds
+                    ?: playerState.currentPlayPosition?.toLong(DurationUnit.MILLISECONDS)
+                    ?: C.TIME_UNSET
+            )
+            .setPlayWhenReady(playWhenReady, PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
+            .setPlaylist(playlist)
+            .setCurrentMediaItemIndex(currentIndex)
+            .setShuffleModeEnabled(
+                playerState.status.shuffleState != PlayerStatus.ShuffleState.Off
+            )
+            .setRepeatMode(
+                when (playerState.repeatState) {
+                    PlayerStatus.RepeatState.Off -> Player.REPEAT_MODE_OFF
+                    PlayerStatus.RepeatState.RepeatTitle -> Player.REPEAT_MODE_ONE
+                    PlayerStatus.RepeatState.RepeatAll -> Player.REPEAT_MODE_ALL
+                }
+            )
+
+        // This app always plays locally in the car. Keep the session's default local device
+        // info so hardware volume controls stay with the vehicle's audio system.
+
+        return builder.build()
+    }
+
+    private fun updateUnacknowledgedState(
+        absolutePlaylistPosition: Int? = null,
+        playlistPositionOffset: Int? = null,
+        positionInTrack: Duration? = null,
+        playState: PlayerStatus.PlayState? = null
+    ) {
+        val state = playerState ?: return
+        var change = unacknowledgedStateChange ?: PendingPlayerCommands()
+        if (absolutePlaylistPosition != null || playlistPositionOffset != null) {
+            change = change.seekTo(
+                absolutePlaylistPosition ?: (
+                    (change.playlistPosition ?: state.playlistPosition) +
+                        (playlistPositionOffset ?: 0)
+                    ),
+                positionInTrack ?: Duration.ZERO,
+                state.playlistTimestamp,
+                state.trackCount,
+                state.repeatState == PlayerStatus.RepeatState.RepeatAll
+            )
+        } else if (positionInTrack != null) {
+            change = change.copy(
+                positionInTrack = positionInTrack,
+                playlistTimestamp = state.playlistTimestamp
+            )
+        }
+        unacknowledgedStateChange = change.copy(playState = playState ?: change.playState)
+        invalidateState()
+
+        unacknowledgedStateRevertJob?.cancel()
+        unacknowledgedStateRevertJob = launch {
+            // Give the server some reasonable amount of time to react
+            delay(3.seconds)
+            clearUnacknowledgedState()
+            invalidateState()
+        }
+    }
+
+    private fun clearUnacknowledgedState() {
+        unacknowledgedStateChange = null
+        unacknowledgedStateRevertJob?.cancel()
+    }
+
+    /**
+     * State to report while nothing is known about the controlled player yet (e.g. right
+     * after the service has been started). A buffering state with a placeholder item is
+     * reported instead of an empty state, because the media session only becomes visible
+     * to the system (and the service only gets into the foreground) if it has a timeline
+     * with a playing/buffering item.
+     */
+    private fun waitingForPlayerState(): State {
+        val placeholder = MediaItemData.Builder(0)
+            .setMediaItem(MediaItem.Builder().setMediaId("waitingForPlayer").build())
+            .build()
+        return State.Builder()
+            .setAvailableCommands(browseCommands())
+            .setPlaybackState(STATE_BUFFERING)
+            .setPlayWhenReady(true, PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
+            .setPlaylist(listOf(placeholder))
+            .setCurrentMediaItemIndex(0)
+            .build()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun updatePlayer(playerId: PlayerId?) {
+        statusSubscription?.cancel()
+        if (playerId == null || !isConnectedToServer) {
+            return
+        }
+        statusSubscription = launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                connectionHelper.playerState(playerId)
+                    .flatMapLatest { it.playStatus }
+                    .collect { status -> handlePlayerStatusUpdate(playerId, status) }
+            }
+        }
+    }
+
+    private fun handlePlayerStatusUpdate(playerId: PlayerId, status: PlayerStatus) {
+        val latestStatus = pendingPlayerState.status
+        val newPlaylistTimestamp = status.playlist.lastChange
+        if (latestStatus != null && newPlaylistTimestamp < latestStatus.playlist.lastChange) {
+            // The new status is older than what we already know about -> ignore it
+            return
+        }
+
+        if (status.playlist.trackCount == 0) {
+            playlistFetchJob?.cancel()
+            pendingPlayerState.playlist = null
+        } else if (status.playlist.lastChange != latestStatus?.playlist?.lastChange) {
+            playlistFetchJob?.cancel()
+            playlistFetchJob = lifecycle.coroutineScope.launch {
+                val playlist = connectionHelper.fetchPlaylist(playerId, PagingParams.All)
+                if (playlist.timestamp == status.playlist.lastChange) {
+                    pendingPlayerState.playlist = playlist
+                    // Player state update is scheduled asynchronously so that the update method
+                    // notices the playlist fetch being done
+                    lifecycle.coroutineScope.launch {
+                        schedulePlayerStateUpdate()
+                    }
+                }
+            }
+        }
+
+        pendingPlayerState.status = status
+        schedulePlayerStateUpdate()
+    }
+
+    private fun schedulePlayerStateUpdate() {
+        delayedStateUpdateJob?.cancel()
+
+        val status = pendingPlayerState.status ?: return
+        val nowPlaying = playerState?.takeIf {
+            it.playlistPosition == status.playlist.currentPosition - 1 &&
+                it.playlistTimestamp == status.playlist.lastChange
+        }?.currentSong
+        val newPlayerState = PlayerState(status, nowPlaying, pendingPlayerState.playlist)
+
+        when {
+            newPlayerState.isCompleteAndConsistent() || playerState == null -> {
+                // Accept immediately if either
+                // - we don't have a state yet (don't wait for playlist)
+                // - or what we have looks consistent
+                applyPlayerState(newPlayerState)
+            }
+
+            playlistFetchJob?.isActive == true -> {
+                // Playlist is currently being fetched; we'll come here again once that is done
+            }
+
+            else -> {
+                // Give the server a little more time for sending us consistent data:
+                // When we come here we have received a status update, fetched the playlist and
+                // the timestamps don't match. That means we'll likely get another status report
+                // which will trigger another playlist fetch.
+                delayedStateUpdateJob = lifecycle.coroutineScope.launch {
+                    delay(500.milliseconds)
+                    applyPlayerState(newPlayerState)
+                }
+            }
+        }
+    }
+
+    private fun applyPlayerState(newPlayerState: PlayerState) {
+        playerState = newPlayerState
+        unacknowledgedStateChange = unacknowledgedStateChange?.acknowledge(
+            newPlayerState.playlistPosition,
+            newPlayerState.currentPlayPosition,
+            newPlayerState.playbackState,
+            newPlayerState.playlistTimestamp
+        )
+        if (unacknowledgedStateChange == null) unacknowledgedStateRevertJob?.cancel()
+        invalidateState()
+    }
+
+    private fun Playlist.PlaylistItem.toMediaItemDataBuilder(position: Int): MediaItemData.Builder {
+        val metadata = MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setAlbumTitle(album)
+            .setArtworkUri(extractIconUrl(appContext)?.toUri())
+            .build()
+        return MediaItemData.Builder(position)
+            .setMediaItem(
+                MediaItem.Builder()
+                    .setMediaId("$position-${hashCode()}")
+                    .setMediaMetadata(metadata)
+                    .build()
+            )
+            .setMediaMetadata(metadata)
+    }
+
+    private class PendingPlayerState {
+        var status: PlayerStatus? = null
+        var playlist: Playlist? = null
+    }
+
+    private data class PlayerState(
+        val status: PlayerStatus,
+        private val nowPlayingFallback: Playlist.PlaylistItem?,
+        val playlist: Playlist?
+    ) {
+        val currentVolume get() = status.currentVolume
+        val currentSong get() = if (status.playlist.trackCount == 0) {
+            null
+        } else {
+            status.playlist.nowPlaying
+                ?: playlist?.items?.getOrNull(playlistPosition - playlist.offset)
+                ?: nowPlayingFallback
+        }
+        val currentSongDuration get() = status.currentSongDuration
+        val currentPlayPosition get() = status.currentPlayPosition
+        val playlistPosition get() = status.playlist.currentPosition - 1
+        val playlistTimestamp get() = status.playlist.lastChange
+        val trackCount get() = status.playlist.trackCount
+        val repeatState get() = status.repeatState
+        val playbackState get() = status.playbackState
+        val powered get() = status.powered
+        val muted get() = status.muted
+
+        fun isCompleteAndConsistent() = status.playlist.trackCount == 0 ||
+            (playlist != null && status.playlist.lastChange == playlist.timestamp)
+    }
+}

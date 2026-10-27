@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ This file is part of SqueezeDrive, an Android Automotive OS client for the Lyrion music server.
+  ~ Copyright (c) 2026 SqueezeDrive contributors
+  ~
+  ~ This program is free software: you can redistribute it and/or modify it under the terms of the
+  ~  GNU General Public License as published by the Free Software Foundation,
+  ~   either version 3 of the License, or (at your option) any later version.
+  ~
+  ~ This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+  ~  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  ~  See the GNU General Public License for more details.
+  ~
+  ~ You should have received a copy of the GNU General Public License along with this program.
+  ~ If not, see <http://www.gnu.org/licenses/>.
+  ~
+  ~ Portions of this project are adapted from Squeeze Client,
+  ~ Copyright (c) 2024 Danny Baumann, under the same license. See NOTICE.
+  -->
+
+<resources>
+    <string name="app_name" translatable="false">SqueezeDrive</string>
+
+    <!-- Notification channels (referenced by the ported service code) -->
+    <string name="media_notification_channel_name">Media control</string>
+    <string name="download_notification_channel_name">Download</string>
+    <string name="download_notification_channel_description">Used for notifications reporting download progress</string>
+    <string name="local_player_notification_channel_name">Local playback</string>
+    <string name="local_player_notification_channel_description">Used for local player state notifications</string>
+
+    <!-- Local player foreground notification -->
+    <string name="local_player_notification_title_disconnected">Local player disconnected</string>
+    <string name="local_player_notification_content_disconnected">Trying to connect to %1$s</string>
+    <string name="local_player_notification_title_playing">Local player playing</string>
+    <string name="local_player_notification_content_playing_title">Playing \'%1$s\'</string>
+    <string name="local_player_notification_content_playing">Playing</string>
+    <string name="local_player_notification_title_stopped">Local player ready</string>
+    <string name="local_player_notification_content_stopped">Connected to server</string>
+
+    <!-- Lyrion home-menu fallback titles (used when the server omits them) -->
+    <string name="item_title_extras">Extras</string>
+    <string name="item_title_settings">Settings</string>
+    <string name="item_title_advanced_settings">Advanced settings</string>
+
+    <!-- Parked settings screen -->
+    <string name="settings_screen_title">Settings</string>
+
+    <string name="settings_category_server">Lyrion server</string>
+    <string name="settings_server_name_title">Name</string>
+    <string name="settings_server_name_dialog_message">A name for this server, shown in SqueezeDrive.</string>
+    <string name="settings_server_url_title">Server address</string>
+    <string name="settings_server_url_summary">Host or host:port — default port 9000</string>
+    <string name="settings_server_url_dialog_message">Enter the Lyrion server as host or host:port — the port defaults to 9000. Add https:// if your server provides it, for example https://lms.local:9001. No trailing path.</string>
+    <string name="settings_server_url_invalid">Enter a host name or host:port, e.g. 192.168.1.10:9000</string>
+    <string name="settings_server_user_title">User name</string>
+    <string name="settings_server_user_dialog_message">Optional. Fill in only if your Lyrion server asks for sign-in.</string>
+    <string name="settings_server_password_title">Password</string>
+    <string name="settings_server_password_dialog_message">Optional. Fill in only if your Lyrion server asks for sign-in.</string>
+    <string name="settings_connection_status_title">Connection status</string>
+    <string name="settings_connection_status_disconnected">Not connected</string>
+    <string name="settings_connection_status_connecting">Connecting</string>
+    <plurals name="settings_connection_status_connected">
+        <item quantity="one">Connected (%1$d player)</item>
+        <item quantity="other">Connected (%1$d players)</item>
+    </plurals>
+    <string name="settings_connection_status_failed">Connection failed: %1$s</string>
+    <string name="settings_reconnect_title">Reconnect</string>
+    <string name="settings_reconnect_summary">Disconnect from the server and connect again.</string>
+
+    <string name="settings_category_local_player">This car (local player)</string>
+    <string name="settings_local_player_enabled_title">Play in this car</string>
+    <string name="settings_local_player_enabled_summary">SqueezeDrive keeps a local player named below registered with your Lyrion server and plays music through the car\'s speakers.</string>
+    <string name="settings_local_player_name_title">Player name</string>
+    <string name="settings_local_player_name_default">This car</string>
+    <string name="settings_local_player_name_dialog_message">The name this car shows as a player on your Lyrion server.</string>
+
+    <string name="settings_category_playback">Playback</string>
+    <string name="settings_fade_in_title">Fade-in duration</string>
+    <string name="settings_volume_step_title">Volume step size</string>
+
+    <string name="settings_category_search">Search</string>
+    <string name="settings_search_title">Search the library</string>
+    <string name="settings_search_summary">Find artists, albums, tracks and genres, and play them now.</string>
+    <string name="settings_search_dialog_title">Search the library</string>
+    <string name="settings_search_hint">Artist, album or track</string>
+    <string name="settings_search_go">Search</string>
+    <string name="settings_search_cancel">Cancel</string>
+    <string name="settings_search_ok">OK</string>
+    <string name="settings_search_close">Close</string>
+    <string name="settings_search_in_progress">Searching for \'%1$s\'…</string>
+    <string name="settings_search_not_connected">Not connected — set up the Lyrion server first</string>
+    <string name="settings_search_no_results">No results for \'%1$s\'</string>
+    <string name="settings_search_results_title">Results for \'%1$s\'</string>
+    <string name="settings_search_error_title">Search failed</string>
+    <string name="settings_search_empty_query">Enter an artist, album or track to search for.</string>
+    <string name="settings_search_item_not_playable">This item can\'t be played from here.</string>
+
+    <string name="settings_category_about">About</string>
+    <string name="settings_about_title">Version and license</string>
+    <string name="settings_about_summary">SqueezeDrive %1$s. Lyrion music for your car. GPL v3. Includes code from Squeeze Client by Danny Baumann.</string>
+</resources>
