@@ -73,7 +73,7 @@ val SharedPreferences.useVolumeButtonsForPlayerVolume: Boolean get() =
 
 val SharedPreferences.volumeStepSize: Int get() = getInt("volume_step_size", 5)
 
-val SharedPreferences.localPlayerEnabled get() = getBoolean("local_player_enabled", false)
+val SharedPreferences.localPlayerEnabled get() = getBoolean("local_player_enabled", true)
 
 fun SharedPreferences.Editor.putLocalPlayerEnabled(enabled: Boolean) {
     putBoolean("local_player_enabled", enabled)

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ This file is part of SqueezeDrive, an Android Automotive OS client for the Lyrion music server.
+  ~ Copyright (c) 2026 SqueezeDrive contributors
+  ~
+  ~ This program is free software: you can redistribute it and/or modify it under the terms of the
+  ~  GNU General Public License as published by the Free Software Foundation,
+  ~   either version 3 of the License, or (at your option) any later version.
+  ~
+  ~ This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+  ~  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  ~  See the GNU General Public License for more details.
+  ~
+  ~ You should have received a copy of the GNU General Public License along with this program.
+  ~ If not, see <http://www.gnu.org/licenses/>.
+  -->
+
+<!--
+  Night-cabin palette: a cool near-black base with one restrained accent, instrument
+  amber (echoing the glow of classic Squeezebox displays). The accent is used for
+  controls only; text stays neutral so album art carries the colour.
+-->
+<resources>
+    <color name="sd_background">#0E1113</color>
+    <color name="sd_surface">#15191C</color>
+    <color name="sd_surface_high">#1D2226</color>
+    <color name="sd_track">#333B40</color>
+    <color name="sd_amber">#F2B24B</color>
+    <color name="sd_amber_ink">#241A08</color>
+    <color name="sd_text_primary">#ECF1F2</color>
+    <color name="sd_text_secondary">#A7B2B7</color>
+    <color name="sd_text_section">#C3CCD1</color>
+</resources>

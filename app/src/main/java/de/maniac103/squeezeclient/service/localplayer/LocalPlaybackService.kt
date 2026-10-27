@@ -43,7 +43,7 @@ import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
-import de.maniac103.squeezeclient.BuildConfig
+import com.sam2kb.squeezedrive.BuildConfig
 import com.sam2kb.squeezedrive.R
 import de.maniac103.squeezeclient.cometd.CometdClient
 import de.maniac103.squeezeclient.cometd.ConnectionState

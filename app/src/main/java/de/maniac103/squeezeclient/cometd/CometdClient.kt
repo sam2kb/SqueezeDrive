@@ -18,7 +18,7 @@
 package de.maniac103.squeezeclient.cometd
 
 import android.util.Log
-import de.maniac103.squeezeclient.BuildConfig
+import com.sam2kb.squeezedrive.BuildConfig
 import de.maniac103.squeezeclient.extfuncs.ValueOrCompletion
 import de.maniac103.squeezeclient.extfuncs.dematerializeCompletion
 import de.maniac103.squeezeclient.extfuncs.materializeCompletion
