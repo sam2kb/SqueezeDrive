@@ -25,6 +25,7 @@ import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -36,29 +37,37 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ServiceLifecycleDispatcher
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
+import de.maniac103.squeezeclient.BuildConfig
 import com.sam2kb.squeezedrive.R
-import de.maniac103.squeezeclient.extfuncs.getOrCreateDeviceIdentifier
+import de.maniac103.squeezeclient.cometd.CometdClient
+import de.maniac103.squeezeclient.cometd.ConnectionState
+import de.maniac103.squeezeclient.extfuncs.connectionHelper
 import de.maniac103.squeezeclient.extfuncs.getOrCreateNotificationChannel
 import de.maniac103.squeezeclient.extfuncs.localPlayerEnabled
 import de.maniac103.squeezeclient.extfuncs.localPlayerName
 import de.maniac103.squeezeclient.extfuncs.prefs
 import de.maniac103.squeezeclient.extfuncs.putLocalPlayerName
+import de.maniac103.squeezeclient.extfuncs.serverConfig
 import de.maniac103.squeezeclient.extfuncs.workManager
-import de.maniac103.squeezeclient.model.PlayerId
-import de.maniac103.squeezeclient.service.MediaService
+import de.maniac103.squeezeclient.model.PlayerStatus
 import de.maniac103.squeezeclient.service.NotificationIds
-import de.maniac103.squeezeclient.ui.MainActivity
-import de.maniac103.squeezeclient.ui.prefs.SettingsActivity
+import com.sam2kb.squeezedrive.media.PlaybackService
+import com.sam2kb.squeezedrive.ui.SettingsActivity
+import kotlin.math.absoluteValue
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 import kotlin.time.ExperimentalTime
 import kotlin.time.toDuration
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.GlobalScope
@@ -69,6 +78,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Response
 
 @OptIn(ExperimentalTime::class)
@@ -80,17 +90,28 @@ class LocalPlaybackService :
     private lateinit var player: LocalPlayer
 
     private var startupTimestampNanos = 0L
+    private var connectedServer: String? = null
 
     override val lifecycle get() = dispatcher.lifecycle
 
     private var slimprotoJob: Job? = null
     private var stateListenerJob: Job? = null
     private var statusUpdateJob: Job? = null
-    private var mediaSessionRequested = false
     private val slimprotoStateFlow = MutableStateFlow<SlimprotoState>(SlimprotoState.Disconnected)
 
     private var sentTrackStartStatus = false
     private var sentBufferReady = false
+
+    private var streamGeneration = 0
+
+    private var streamInterrupted = false
+
+    private var handOffPosition: Int? = null
+    private var continuationTrack: PlayerStatus.PlaylistInfo? = null
+
+    private var continuationUntil = 0L
+
+    private var streamResumesAfterPause = false
 
     override fun onCreate() {
         dispatcher.onServicePreSuperOnCreate()
@@ -102,7 +123,7 @@ class LocalPlaybackService :
             onPlaybackAdvancedToNextTrack = { onPlaybackAdvancedToNextTrack() },
             onPlaybackEnded = { streamEnded -> onPlaybackEnded(streamEnded) },
             onPlaybackError = { onPlaybackError() },
-            onPauseStateChanged = { paused -> onPauseStateChanged(paused) },
+            onPauseStateChanged = { paused, reason -> onPauseStateChanged(paused, reason) },
             onAudioStreamFlushed = { onAudioStreamFlushed() },
             onDecoderLoadFinished = { onDecoderLoadFinished() },
             onDecodingFinished = { onDecodingFinished() },
@@ -110,6 +131,9 @@ class LocalPlaybackService :
             onMetadataReceived = { title, artworkUri -> onMetadataReceived(title, artworkUri) }
         )
         startupTimestampNanos = System.nanoTime()
+        connectionHelper.positionChangeRequests.playerId = slimproto.playerId
+        connectedServer = prefs.serverConfig?.url?.toString()
+        connectionHelper.localPlayerPosition.server = connectedServer
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -134,7 +158,9 @@ class LocalPlaybackService :
                         .debounce(500.milliseconds)
                         .collectLatest { state ->
                             updateForegroundNotification(state)
-                            updateMediaSession(state)
+                            if (state is SlimprotoState.PlayingOrPaused && !state.paused) {
+                                PlaybackService.start(this@LocalPlaybackService)
+                            }
                         }
                 }
             }
@@ -149,7 +175,9 @@ class LocalPlaybackService :
         GlobalScope.launch {
             slimproto.disconnect()
         }
-        player.stop()
+        player.stop(restoreVolumeImmediately = true)
+        connectionHelper.localPlayerPosition.clear(slimproto.playerId)
+        connectionHelper.positionChangeRequests.playerId = null
         super.onDestroy()
     }
 
@@ -183,16 +211,34 @@ class LocalPlaybackService :
     }
 
     private fun onPlaybackAdvancedToNextTrack() = lifecycleScope.launch {
+        continuationUntil = 0
+        continuationTrack = null
+        streamResumesAfterPause = false
+        streamGeneration++
         sendStatus(SlimprotoSocket.StatusType.TrackStarted)
         sentTrackStartStatus = true
     }
 
-    private fun onPauseStateChanged(paused: Boolean) = lifecycleScope.launch {
+    private fun onPauseStateChanged(paused: Boolean, reason: Int) = lifecycleScope.launch {
         slimprotoStateFlow.emit(
             SlimprotoState.PlayingOrPaused(player.playingTitle, paused)
         )
         if (!paused) {
             handlePlaybackStart()
+        }
+        if (paused && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
+            try {
+                connectionHelper.changePlaybackState(
+                    slimproto.playerId,
+                    PlayerStatus.PlayState.Paused
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CometdClient.CometdException) {
+                Log.d(TAG, "Could not pause after audio focus loss", e)
+            } catch (e: IllegalStateException) {
+                Log.d(TAG, "Could not pause after audio focus loss", e)
+            }
         }
     }
 
@@ -206,6 +252,7 @@ class LocalPlaybackService :
     }
 
     private fun onPlaybackError() = lifecycleScope.launch {
+        markStreamInterrupted()
         sentTrackStartStatus = false
         sendStatus(SlimprotoSocket.StatusType.StreamingFailed)
     }
@@ -231,11 +278,13 @@ class LocalPlaybackService :
 
     private fun connectAndRunSlimproto() = lifecycleScope.launch {
         slimprotoStateFlow.emit(SlimprotoState.Disconnected)
+        var hasConnected = false
         while (isActive) {
             var connected = false
             // Attempt server connection
             while (isActive && !connected) {
-                connected = slimproto.connect()
+                connected = if (hasConnected) slimproto.reconnect() else slimproto.connect()
+                hasConnected = hasConnected || connected
                 if (!connected) {
                     delay(10.seconds)
                 }
@@ -248,41 +297,13 @@ class LocalPlaybackService :
                     .onSuccess { handleCommand(it) }
                     .onFailure {
                         Log.d(TAG, "Could not read command from socket", it)
+                        markStreamInterrupted()
                         connected = slimproto.reconnect()
                     }
             }
             statusUpdateJob?.cancel()
             slimprotoStateFlow.emit(SlimprotoState.Disconnected)
         }
-    }
-
-    /**
-     * Makes sure a media session exposing this device's player exists while playback is
-     * ongoing - the system (and with it e.g. a Bluetooth connected car head unit) can only
-     * show metadata and route controls for a player that has an active media session. This
-     * must not depend on the app UI having been opened, as playback can also be started
-     * remotely (e.g. from the LMS web UI).
-     */
-    private fun updateMediaSession(state: SlimprotoState) {
-        val playbackOngoing = state is SlimprotoState.PlayingOrPaused
-        if (playbackOngoing && !mediaSessionRequested) {
-            mediaSessionRequested = true
-            MediaService.start(this, localPlayerId())
-        } else if (!playbackOngoing) {
-            mediaSessionRequested = false
-        }
-    }
-
-    /**
-     * The ID the server knows this device's player under. The server uses the MAC address sent
-     * in the HELO packet as player ID (see SlimprotoSocket.sendHello).
-     */
-    private fun localPlayerId(): PlayerId {
-        val identifier = prefs.getOrCreateDeviceIdentifier()
-        val mac = (0..5).joinToString(":") {
-            "%02x".format((identifier.leastSignificantBits shr (it * 8)) and 0xff)
-        }
-        return PlayerId(mac)
     }
 
     @SuppressLint("InlinedApi")
@@ -319,17 +340,10 @@ class LocalPlaybackService :
             )
         }
 
-        val contentIntentStack = arrayOf(
-            Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                .addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
-            Intent(this, SettingsActivity::class.java)
-        )
-        val contentIntent = PendingIntentCompat.getActivities(
+        val contentIntent = PendingIntentCompat.getActivity(
             this,
             0,
-            contentIntentStack,
+            Intent(this, SettingsActivity::class.java),
             0,
             false
         )
@@ -349,25 +363,139 @@ class LocalPlaybackService :
         )
     }
 
+    private fun markStreamInterrupted() {
+        if (!streamInterrupted) {
+            continuationTrack = connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist
+        }
+        streamInterrupted = true
+    }
+
+    private fun playerPosition() = player.determineSongPosition()
+
+    private fun checkServerPositionAfterRestart(streamId: Int) = lifecycleScope.launch {
+        delay(RESTART_STATUS_DELAY)
+        if (player.currentStreamId != streamId) return@launch
+        if (player.hasAbsolutePlaybackPosition) return@launch
+        val serverPosition = fetchServerPosition() ?: return@launch
+        if (player.currentStreamId != streamId) return@launch
+        val played = player.determinePlaybackPosition()
+        if (serverPosition <= played.inWholeSeconds + ADOPT_MIN_DIFFERENCE.inWholeSeconds) {
+            return@launch // The server starts the song at its beginning, nothing to adopt
+        }
+        player.setStreamOffset(
+            streamId,
+            (serverPosition.seconds - played).coerceAtLeast(Duration.ZERO)
+        )
+    }
+
+    private fun handOffPositionToServer(streamId: Int, restartPosition: Duration) =
+        lifecycleScope.launch {
+            var firstPlayedPosition: Duration? = null
+            val track = connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist
+            repeat(HAND_OFF_ATTEMPTS) {
+                if (player.currentStreamId != streamId ||
+                    connectionHelper.positionChangeRequests.isRecent(slimproto.playerId)
+                ) {
+                    return@launch
+                }
+                val played = player.determinePlaybackPosition()
+                if (firstPlayedPosition == null && player.isPlaying && played > Duration.ZERO) {
+                    firstPlayedPosition = played
+                }
+                val playedAfterRestart = firstPlayedPosition?.let {
+                    (played - it).coerceAtLeast(Duration.ZERO)
+                } ?: Duration.ZERO
+                val ourPosition = restartPosition + playedAfterRestart
+                val serverPosition = fetchServerPosition()
+                val currentTrack = connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist
+                val trackChanged = track != null && currentTrack != null &&
+                    !sameTrack(track, currentTrack)
+                if (player.currentStreamId != streamId || trackChanged) return@launch
+                if (connectionHelper.positionChangeRequests.isRecent(slimproto.playerId) ||
+                    !isCurrentServer()
+                ) {
+                    return@launch
+                }
+                if (serverPosition != null) {
+                    val difference = serverPosition - ourPosition.inWholeSeconds
+                    if (difference.absoluteValue < HAND_OFF_MIN_DIFFERENCE.inWholeSeconds) {
+                        return@launch // The positions already match
+                    }
+                    if (difference.absoluteValue > HAND_OFF_MAX_DIFFERENCE.inWholeSeconds) {
+                        return@launch // Too large to be a position for the same track
+                    }
+                    continuationUntil =
+                        SystemClock.elapsedRealtime() + SEEK_RESTART_WINDOW.inWholeMilliseconds
+                    // The next stream answers our seek and continues the recovered track.
+                    val seekPosition = ourPosition.inWholeSeconds.toInt()
+                    handOffPosition = seekPosition
+                    connectionHelper.updatePlaybackPosition(slimproto.playerId, seekPosition)
+                    return@launch
+                }
+                delay(HAND_OFF_RETRY_DELAY)
+            }
+        }
+
+    private suspend fun fetchServerPosition(): Int? = try {
+        val expected = connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist
+        if (!isCurrentServer() || connectionHelper.state.value !is ConnectionState.Connected) {
+            null
+        } else {
+            withTimeoutOrNull(2.seconds) {
+                val status = connectionHelper.fetchPlayerStatus(slimproto.playerId)
+                if (expected != null &&
+                    !sameTrack(expected, status.playlist)
+                ) {
+                    return@withTimeoutOrNull null
+                }
+                status.currentPlayPosition?.inWholeSeconds?.toInt()
+            }
+        }
+    } catch (e: CometdClient.CometdException) {
+        null
+    }
+
+    private fun isCurrentServer() = connectedServer == prefs.serverConfig?.url?.toString()
+
+    private fun sameTrack(first: PlayerStatus.PlaylistInfo, second: PlayerStatus.PlaylistInfo) =
+        first.currentPosition == second.currentPosition && first.nowPlaying == second.nowPlaying
+
     @androidx.annotation.OptIn(UnstableApi::class)
     private suspend fun sendStatus(type: SlimprotoSocket.StatusType) {
         val nowNanos = System.nanoTime()
         val elapsed = (nowNanos - startupTimestampNanos).toDuration(DurationUnit.NANOSECONDS)
         val (bufferFullness, bufferSize) = player.estimateBufferFullnessAndSize()
+        val position = playerPosition()
+        // LMS adds its seek offset to STAT elapsed time; send only time within this stream.
+        val streamPosition = player.determineStreamPosition()
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                TAG,
+                "Position stream=${player.currentStreamId} local=${player.determinePlaybackPosition().inWholeMilliseconds} reported=${position.inWholeMilliseconds} elapsed=${streamPosition.inWholeMilliseconds} playing=${player.isPlaying}"
+            )
+        }
+        connectionHelper.lastPlayerStatus(slimproto.playerId)?.let {
+            connectionHelper.localPlayerPosition.update(
+                slimproto.playerId,
+                it,
+                position,
+                player.isPlaying
+            )
+        }
 
         slimproto.sendStatus(
             type,
             elapsed,
             player.readyForPlayback,
-            player.determinePlaybackPosition(nowNanos),
+            streamPosition,
             player.totalTransferredBytes,
             bufferFullness,
             bufferSize
         )
 
-        // Make sure we send an update at least once per second while playing
+        // Keep reporting while playback is requested, including temporary audio focus loss.
         statusUpdateJob?.cancel()
-        if (player.isPlaying) {
+        if (player.readyForPlayback && !player.paused) {
             statusUpdateJob = lifecycleScope.launch {
                 delay(1.seconds)
                 sendStatus(SlimprotoSocket.StatusType.Timer(0))
@@ -386,12 +514,58 @@ class LocalPlaybackService :
 
             is SlimprotoSocket.CommandPacket.Continue -> {
                 if (player.readyForPlaybackOrBuffering) {
+                    streamResumesAfterPause = false
                     player.paused = false
                 }
             }
 
             is SlimprotoSocket.CommandPacket.StreamStart -> {
+                val previousPosition = playerPosition()
+                // A recent seek identifies the new stream even if the server's time is stale.
+                val positionRequest = connectionHelper.positionChangeRequests.current(
+                    slimproto.playerId,
+                    connectionHelper.lastPlayerStatus(
+                        slimproto.playerId
+                    )?.playlist?.currentPosition,
+                    connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist?.nowPlaying
+                )
+                val requestedPosition = positionRequest?.positionSeconds
+                val currentTrack = connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist
+                val trackMatches = continuationTrack?.let { previous ->
+                    currentTrack == null || sameTrack(previous, currentTrack)
+                } ?: true
+                val handOffDue = requestedPosition != null &&
+                    requestedPosition == handOffPosition &&
+                    SystemClock.elapsedRealtime() < continuationUntil
+                val streamContinues = trackMatches && (
+                    handOffDue || streamInterrupted || streamResumesAfterPause ||
+                        SystemClock.elapsedRealtime() < continuationUntil
+                    )
+                val continuesCurrentStream = (positionRequest == null || handOffDue) &&
+                    streamContinues
+                val needsHandOff = positionRequest == null && trackMatches &&
+                    (streamInterrupted || streamResumesAfterPause)
+                // Server-initiated restarts can arrive in bursts; keep treating them as one
+                // continuation, so the position stays continuous across the whole burst.
+                continuationUntil = if (continuesCurrentStream) {
+                    SystemClock.elapsedRealtime() + SEEK_RESTART_WINDOW.inWholeMilliseconds
+                } else {
+                    0
+                }
+                continuationTrack = if (continuesCurrentStream) currentTrack else null
+                streamInterrupted = false
+                streamResumesAfterPause = false
+                handOffPosition = null
                 sendStatus(SlimprotoSocket.StatusType.Connecting)
+                streamGeneration++
+
+                // Attach the offset to this source so preloading cannot alter the current track.
+                val startPosition = when {
+                    requestedPosition != null -> requestedPosition.seconds
+                    continuesCurrentStream -> previousPosition
+                    else -> Duration.ZERO
+                }
+
                 sentTrackStartStatus = false // new strm-s requires new STMs to be sent
                 sentBufferReady = command.autoStart
                 player.play(
@@ -401,14 +575,28 @@ class LocalPlaybackService :
                     command.replayGain,
                     // In direct streaming case we need to wait for the
                     // continue packet before starting playback
-                    command.autoStart && !command.directStreaming
+                    command.autoStart && !command.directStreaming,
+                    // A restarted stream replaces the stream we play; a stream for the next
+                    // playlist item is appended so it can be pre-buffered for gapless playback.
+                    continuesCurrentStream || positionRequest != null,
+                    streamGeneration,
+                    startPosition
                 )
+                connectionHelper.positionChangeRequests.clear(positionRequest)
+                if (needsHandOff) {
+                    handOffPositionToServer(streamGeneration, previousPosition)
+                } else if (!continuesCurrentStream && positionRequest == null) {
+                    checkServerPositionAfterRestart(streamGeneration)
+                }
             }
 
             is SlimprotoSocket.CommandPacket.StreamPause -> {
+                continuationTrack = connectionHelper.lastPlayerStatus(slimproto.playerId)?.playlist
+                streamResumesAfterPause = true
                 player.paused = true
                 if (command.pauseInterval != null) {
                     delay(command.pauseInterval)
+                    streamResumesAfterPause = false
                     player.paused = false
                 } else {
                     sendStatus(SlimprotoSocket.StatusType.StreamingPaused)
@@ -416,6 +604,7 @@ class LocalPlaybackService :
             }
 
             is SlimprotoSocket.CommandPacket.StreamUnpause -> {
+                streamResumesAfterPause = false
                 val uptime = (System.nanoTime() - startupTimestampNanos)
                     .toDuration(DurationUnit.NANOSECONDS)
                 val unpauseDelay = command.unpauseTimestamp - uptime
@@ -442,14 +631,18 @@ class LocalPlaybackService :
 
             is SlimprotoSocket.CommandPacket.TriggerGetSetting -> {
                 if (command.type == SlimprotoSocket.SettingType.PlayerName) {
-                    val name = prefs.localPlayerName ?: "SqueezeClient - ${Build.MODEL}"
+                    // Trim \0 characters from saved setting that were written before
+                    // the trimming code below was added
+                    val name = prefs.localPlayerName?.trim('\u0000')
+                        ?: "This car"
                     slimproto.sendSetSetting(command.type, name.toByteArray(Charsets.US_ASCII))
                 }
             }
 
             is SlimprotoSocket.CommandPacket.SetSetting -> {
                 if (command.type == SlimprotoSocket.SettingType.PlayerName) {
-                    val name = String(command.data)
+                    // The server sends the name 0 terminated; remove the termination before saving
+                    val name = String(command.data).trim('\u0000')
                     Log.d(TAG, "Changing local player name to $name")
                     prefs.edit {
                         putLocalPlayerName(name)
@@ -471,6 +664,20 @@ class LocalPlaybackService :
 
     companion object {
         private const val TAG = "LocalPlaybackService"
+
+        private val HAND_OFF_MIN_DIFFERENCE = 5.seconds
+
+        private val HAND_OFF_MAX_DIFFERENCE = 10.minutes
+
+        private const val HAND_OFF_ATTEMPTS = 10
+
+        private val HAND_OFF_RETRY_DELAY = 2.seconds
+
+        private val SEEK_RESTART_WINDOW = 5.seconds
+
+        private val RESTART_STATUS_DELAY = 2.seconds
+
+        private val ADOPT_MIN_DIFFERENCE = 2.seconds
 
         fun triggerStartOrStop(context: Context) {
             val serviceIntent = Intent(context, LocalPlaybackService::class.java)

@@ -80,6 +80,8 @@ import de.maniac103.squeezeclient.model.PagingParams
 import de.maniac103.squeezeclient.model.PlayerId
 import de.maniac103.squeezeclient.model.PlayerStatus
 import de.maniac103.squeezeclient.model.SlimBrowseItemList
+import de.maniac103.squeezeclient.service.localplayer.LocalPlayerPosition
+import de.maniac103.squeezeclient.service.localplayer.PositionChangeRequests
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
@@ -133,6 +135,18 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
     private var pendingDisconnectJob: Job? = null
     private var mediaDirectories = listOf<String>()
     private var nextRequestId = 1
+    val localPlayerPosition = LocalPlayerPosition()
+    val positionChangeRequests = PositionChangeRequests()
+
+    fun lastPlayerStatus(playerId: PlayerId) =
+        playerStates[playerId]?.playStatus?.replayCache?.lastOrNull()
+
+    fun localPlayPosition(playerId: PlayerId?, status: PlayerStatus) =
+        localPlayerPosition.takeIf { it.server == appContext.prefs.serverConfig?.url?.toString() }
+            ?.forPlayer(playerId, status)
+
+    suspend fun fetchPlayerStatus(playerId: PlayerId) =
+        doRequestWithResult<PlayerStatusResponse>(PlayerStatusRequest(playerId)).asModelStatus(json)
 
     fun connect() {
         if (connectionScope != null) {
@@ -273,7 +287,9 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
         publishOneShotRequest(RemovePlaylistItemRequest(playerId, position))
 
     suspend fun advanceToPlaylistPosition(playerId: PlayerId, position: Int) =
-        publishOneShotRequest(
+        publishPositionCommand(
+            playerId,
+            null,
             SetPlaylistPositionRequest(playerId, position, appContext.prefs.fadeInDuration)
         )
 
@@ -295,19 +311,15 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
         val request = when (state) {
             PlayerStatus.PlayState.Stopped -> ChangePlaybackStateRequest.Stop(playerId)
 
-            PlayerStatus.PlayState.Paused -> if (currentState == PlayerStatus.PlayState.Playing) {
-                ChangePlaybackStateRequest.Pause(playerId)
-            } else {
-                null
-            }
+            PlayerStatus.PlayState.Paused -> ChangePlaybackStateRequest.Pause(playerId)
 
             PlayerStatus.PlayState.Playing -> if (currentState == PlayerStatus.PlayState.Paused) {
                 ChangePlaybackStateRequest.Unpause(playerId, appContext.prefs.fadeInDuration)
             } else {
                 ChangePlaybackStateRequest.Play(playerId, appContext.prefs.fadeInDuration)
             }
-        } ?: return
-        publishOneShotRequest(request)
+        }
+        publishCommand(request)
     }
 
     suspend fun syncPlayers(masterPlayerId: PlayerId, slavePlayerId: PlayerId) =
@@ -316,10 +328,10 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
         publishOneShotRequest(UnsyncPlayerRequest(playerId))
 
     suspend fun setMuteState(playerId: PlayerId, muted: Boolean) =
-        publishOneShotRequest(SetMuteStateRequest(playerId, muted))
+        publishCommand(SetMuteStateRequest(playerId, muted))
 
     suspend fun setVolume(playerId: PlayerId, volume: Int) =
-        publishOneShotRequest(SetVolumeRequest(playerId, volume))
+        publishCommand(SetVolumeRequest(playerId, volume))
 
     suspend fun getCurrentTrackInfo(playerId: PlayerId) =
         doRequestWithResult<CurrentTrackInfoResponse>(CurrentTrackInfoRequest(playerId)).current
@@ -333,14 +345,25 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
     suspend fun removeFavorite(playerId: PlayerId, url: String, title: String) =
         publishOneShotRequest(FavoritesDeleteRequest(playerId, url, title))
 
-    suspend fun togglePower(playerId: PlayerId) =
-        publishOneShotRequest(PlayerPowerRequest(playerId, null))
+    suspend fun togglePower(playerId: PlayerId) = publishCommand(PlayerPowerRequest(playerId, null))
     suspend fun setPowerState(playerId: PlayerId, on: Boolean) =
-        publishOneShotRequest(PlayerPowerRequest(playerId, on))
-    suspend fun sendButtonRequest(request: PlaybackButtonRequest) = publishOneShotRequest(request)
+        publishCommand(PlayerPowerRequest(playerId, on))
+    suspend fun sendButtonRequest(request: PlaybackButtonRequest) {
+        if (request is PlaybackButtonRequest.NextTrack ||
+            request is PlaybackButtonRequest.PreviousTrack
+        ) {
+            publishPositionCommand(request.targetPlayerId, null, request)
+        } else {
+            publishCommand(request)
+        }
+    }
 
     suspend fun updatePlaybackPosition(playerId: PlayerId, positionSeconds: Int) =
-        publishOneShotRequest(SetPlaybackPositionRequest(playerId, positionSeconds))
+        publishPositionCommand(
+            playerId,
+            positionSeconds,
+            SetPlaybackPositionRequest(playerId, positionSeconds)
+        )
 
     suspend fun getLocalLibrarySearchResultCounts(
         searchTerm: String
@@ -390,11 +413,47 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
         return json.decodeFromJsonElement<T>(jsonData)
     }
 
+    private suspend fun publishPositionCommand(
+        playerId: PlayerId,
+        position: Int?,
+        request: Request
+    ) {
+        val pending = if (localPlayerPosition.server ==
+            appContext.prefs.serverConfig?.url?.toString()
+        ) {
+            positionChangeRequests.note(
+                playerId,
+                position,
+                lastPlayerStatus(playerId)?.playlist?.currentPosition,
+                lastPlayerStatus(playerId)?.playlist?.nowPlaying
+            )
+        } else {
+            null
+        }
+        try {
+            publishOneShotRequest(request)
+        } catch (e: Exception) {
+            positionChangeRequests.clear(pending)
+            if (e !is CometdClient.CometdException) throw e
+            Log.d(TAG, "Could not send $request", e)
+        }
+    }
+
+    private suspend fun publishCommand(request: Request) {
+        try {
+            publishOneShotRequest(request)
+        } catch (e: CometdClient.CometdException) {
+            Log.d(TAG, "Could not send $request", e)
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun publishOneShotRequest(request: Request): JsonElement {
         val client = client
-        val clientId = client?.clientId ?: throw IllegalStateException()
-        val scope = connectionScope ?: throw IllegalStateException()
+        val clientId = client?.clientId
+            ?: throw CometdClient.CometdException("Not connected to the server")
+        val scope = connectionScope
+            ?: throw CometdClient.CometdException("Not connected to the server")
 
         return try {
             publishSingleOneShotRequestAttempt(client, clientId, scope, request)
@@ -615,7 +674,11 @@ class ConnectionHelper(private val appContext: SqueezeDriveApplication) {
                         jobHolder.cancel(e)
                     }
                     if (subscribed) {
-                        requestMethod()?.let { emit(it) }
+                        try {
+                            requestMethod()?.let { emit(it) }
+                        } catch (e: CometdClient.CometdException) {
+                            Log.d(TAG, "Could not request the initial state", e)
+                        }
                         jobHolder.launch {
                             try {
                                 val flow = connectionHelper.client?.subscribe(responseChannel)

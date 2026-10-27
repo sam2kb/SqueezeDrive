@@ -27,6 +27,7 @@ import de.maniac103.squeezeclient.extfuncs.readRemainderAsArray
 import de.maniac103.squeezeclient.extfuncs.readString
 import de.maniac103.squeezeclient.extfuncs.serverConfig
 import de.maniac103.squeezeclient.extfuncs.skip
+import de.maniac103.squeezeclient.model.PlayerId
 import java.io.Closeable
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -47,6 +48,12 @@ class SlimprotoSocket(prefs: SharedPreferences) {
     val host: String? = prefs.serverConfig?.url?.host
     private val deviceIdentifier: UUID = prefs.getOrCreateDeviceIdentifier()
     private var socket: SocketHolder? = null
+
+    private val playerMac get() = ByteArray(6) { i ->
+        (deviceIdentifier.leastSignificantBits shr (i * 8)).toByte()
+    }
+
+    val playerId get() = PlayerId(playerMac.joinToString(":") { "%02x".format(it) })
 
     private val packetParsers: Map<String, (ByteBuffer) -> CommandPacket> = mapOf(
         "aude" to this::parseAudioEnablePacket,
@@ -85,7 +92,7 @@ class SlimprotoSocket(prefs: SharedPreferences) {
     }
 
     private fun teardownSocket() {
-        socket?.close()
+        socket?.closeQuietly()
         socket = null
     }
 
@@ -290,14 +297,11 @@ class SlimprotoSocket(prefs: SharedPreferences) {
             "AccuratePlayPoints=1",
             "CanHTTPS=1"
         )
-        val macBytes = ByteArray(6) { i ->
-            (deviceIdentifier.leastSignificantBits shr (i * 8)).toByte()
-        }
         val capabilityString = (supportedFormats + supportedCapabilities).joinToString(",")
         val payload = ByteBuffer.allocate(36 + capabilityString.length).apply {
             put(12) // device ID
             put(1) // revision
-            put(macBytes) // MAC
+            put(playerMac) // MAC
             putLong(deviceIdentifier.mostSignificantBits) // UUID
             putLong(deviceIdentifier.leastSignificantBits)
             putShort(if (reconnect) 0x4000 else 0) // WLAN channel list
@@ -426,16 +430,32 @@ class SlimprotoSocket(prefs: SharedPreferences) {
         }
 
         suspend fun write(data: ByteBuffer) = withContext(Dispatchers.IO) {
-            synchronized(sink) {
-                sink.write(data)
-                sink.flush()
+            try {
+                synchronized(sink) {
+                    sink.write(data)
+                    sink.flush()
+                }
+            } catch (e: IOException) {
+                // Unblock the reader so the existing reconnect loop can recover.
+                Log.d(TAG, "Could not send a command, closing the connection", e)
+                closeQuietly()
             }
         }
 
+        fun closeQuietly() {
+            runCatching { close() }
+        }
+
         override fun close() {
-            sink.close()
-            source.close()
-            socket.close()
+            try {
+                socket.close()
+            } finally {
+                try {
+                    sink.close()
+                } finally {
+                    source.close()
+                }
+            }
         }
 
         companion object {

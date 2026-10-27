@@ -32,7 +32,8 @@ val SharedPreferences.forceGridLayout get() =
 val SharedPreferences.serverConfig: ServerConfiguration? get() {
     val name = getString("server_name", null)
     val hostnameAndPort = getString("server_url", null)
-    return if (name != null && hostnameAndPort != null) {
+    // A saved blank address cannot form a URL.
+    return if (name != null && !hostnameAndPort.isNullOrBlank()) {
         ServerConfiguration(
             name,
             hostnameAndPort,
@@ -87,7 +88,7 @@ enum class LocalPlayerVolumeMode(val prefValue: String) {
 val SharedPreferences.localPlayerVolumeMode: LocalPlayerVolumeMode get() {
     val value = getString(
         "local_player_volume_mode",
-        LocalPlayerVolumeMode.DeviceWhilePlaying.prefValue
+        LocalPlayerVolumeMode.PlayerOnly.prefValue
     )
     return LocalPlayerVolumeMode.entries.find { value == it.prefValue }
         ?: throw IllegalStateException("Local player volume mode value $value has no mapping")
@@ -120,11 +121,8 @@ fun SharedPreferences.getOrCreateDeviceIdentifier(): UUID {
     return uuid
 }
 
-// The server terminates the player name with a NUL byte, which the app must not store: the
-// stored name is sent back to the server when it asks for the player name.
-val SharedPreferences.localPlayerName: String?
-    get() = getString("local_player_name", null)?.trimEnd('\u0000')
+val SharedPreferences.localPlayerName: String? get() = getString("local_player_name", null)
 
 fun SharedPreferences.Editor.putLocalPlayerName(name: String) {
-    putString("local_player_name", name.trimEnd('\u0000'))
+    putString("local_player_name", name)
 }
